@@ -10,7 +10,7 @@ int main(int argc, char** argv)
     // Argument parsing
     if (argc < 3)
     {
-        std::cout << "Usage: vasset-cli <asset-folder> <imported-folder> [working-folder]" << std::endl;
+        std::cout << "Usage: vasset-cli <asset-folder> <imported-folder> [working-directory]" << std::endl;
         return 1;
     }
 
