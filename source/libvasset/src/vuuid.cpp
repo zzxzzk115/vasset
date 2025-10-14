@@ -1,11 +1,12 @@
 #include "vasset/vuuid.hpp"
 
+#include <xxhash.h>
+
 #include <algorithm>
+#include <cstring>
 #include <iomanip>
 #include <random>
 #include <sstream>
-#include <xxhash.h>
-
 
 namespace vasset
 {
@@ -42,7 +43,7 @@ namespace vasset
 
         XXH128_hash_t h = XXH3_128bits(normalized.data(), normalized.size());
         VUUID         id;
-        memcpy(id.bytes.data(), &h, sizeof(h));
+        std::memcpy(id.bytes.data(), &h, sizeof(h));
         return id;
     }
 
