@@ -1,9 +1,11 @@
 #include "vasset/vuuid.hpp"
 
+#include <algorithm>
 #include <iomanip>
 #include <random>
 #include <sstream>
 #include <xxhash.h>
+
 
 namespace vasset
 {
