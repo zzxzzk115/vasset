@@ -72,6 +72,7 @@ namespace vasset
 
     struct VMaterial
     {
+        VUUID                         uuid;
         VMaterialType                 type {VMaterialType::ePBRMetallicRoughness};
         VMaterialPBRMetallicRoughness pbrMR;
         std::string                   name;

@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <xxhash.h>
 
 namespace vasset
 {
@@ -31,6 +32,18 @@ namespace vasset
         return id;
     }
 
+    VUUID VUUID::fromFilePath(const std::string& filePath)
+    {
+        std::string normalized = filePath;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
+
+        XXH128_hash_t h = XXH3_128bits(normalized.data(), normalized.size());
+        VUUID         id;
+        memcpy(id.bytes.data(), &h, sizeof(h));
+        return id;
+    }
+
     std::string VUUID::toString() const
     {
         std::ostringstream ss;
@@ -41,6 +54,11 @@ namespace vasset
                 ss << "-";
         }
         return ss.str();
+    }
+
+    bool VUUID::isNil() const
+    {
+        return std::all_of(bytes.begin(), bytes.end(), [](uint8_t b) { return b == 0; });
     }
 
     bool VUUID::operator==(const VUUID& other) const noexcept { return bytes == other.bytes; }

@@ -124,6 +124,19 @@ TEST(TextureSerialization, BasicSerialization)
     ASSERT_EQ(loadedTexture.data, texture.data);
 }
 
+TEST(UUID, FilePath)
+{
+    std::string path = "imported/textures/example_texture.vtex";
+    VUUID       uuid1 = VUUID::fromFilePath(path);
+    VUUID       uuid2 = VUUID::fromFilePath(path);
+    ASSERT_EQ(uuid1, uuid2); // Same path should yield same UUID
+    ASSERT_FALSE(uuid1.isNil());
+    std::string differentPath = "imported/textures/another_texture.vtex";
+    VUUID       uuid3 = VUUID::fromFilePath(differentPath);
+    ASSERT_NE(uuid1, uuid3); // Different paths should yield different UUIDs
+    ASSERT_FALSE(uuid3.isNil());
+}
+
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
