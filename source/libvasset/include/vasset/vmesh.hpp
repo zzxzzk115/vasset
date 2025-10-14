@@ -11,7 +11,7 @@
 
 namespace vasset
 {
-    struct VSubMesh
+    struct VSubMesh // -> aiMesh
     {
         uint32_t vertexOffset {0};
         uint32_t vertexCount {0};
@@ -24,7 +24,7 @@ namespace vasset
         std::string name;
     };
 
-    struct VMesh
+    struct VMesh // -> aiNode
     {
         VUUID uuid;
 

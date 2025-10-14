@@ -1,5 +1,6 @@
 #include "vasset/vmaterial.hpp"
 
+#include <filesystem>
 #include <fstream>
 
 namespace vasset
@@ -7,6 +8,9 @@ namespace vasset
     bool saveMaterial(const VMaterial& material, const std::string& filePath)
     {
         // Binary writing
+        std::filesystem::path path(filePath);
+        if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
+            std::filesystem::create_directories(path.parent_path());
         std::ofstream file(filePath, std::ios::binary);
         if (!file)
             return false;
@@ -14,6 +18,9 @@ namespace vasset
         // 16 bytes for magic number
         const char magic[16] = "VMATERIAL\0";
         file.write(magic, sizeof(magic));
+
+        // 4 bytes for UUID
+        file.write(reinterpret_cast<const char*>(&material.uuid), sizeof(material.uuid));
 
         // 4 bytes for material type
         file.write(reinterpret_cast<const char*>(&material.type), sizeof(material.type));
@@ -94,6 +101,9 @@ namespace vasset
         file.read(magic, sizeof(magic));
         if (std::string(magic) != "VMATERIAL")
             return false;
+
+        // 4 bytes for UUID
+        file.read(reinterpret_cast<char*>(&outMaterial.uuid), sizeof(outMaterial.uuid));
 
         // 4 bytes for material type
         file.read(reinterpret_cast<char*>(&outMaterial.type), sizeof(outMaterial.type));

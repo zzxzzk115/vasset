@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vasset/vasset_type.hpp"
 #include "vasset/vuuid.hpp"
 
 #include <string>
@@ -10,16 +11,31 @@ namespace vasset
     class VAssetRegistry
     {
     public:
-        bool registerAsset(const VUUID& uuid, const std::string& path);
+        struct AssetEntry
+        {
+            std::string path;
+            VAssetType  type {VAssetType::eUnknown};
 
-        std::string lookup(const VUUID& uuid) const;
+            std::string toString() const
+            {
+                return "AssetEntry { path: " + path + ", type: " + vasset::toString(type) + " }";
+            }
+        };
+
+        bool registerAsset(const VUUID& uuid, const std::string& path, VAssetType type);
+
+        AssetEntry lookup(const VUUID& uuid) const;
+
+        const std::unordered_map<std::string, AssetEntry>& getRegistry() const;
 
         void save(const std::string& filename) const;
 
         void load(const std::string& filename);
 
+        static std::string getImportedAssetPath(VAssetType type, const std::string& assetName);
+
     private:
-		// UUID -> File Path
-        std::unordered_map<VUUID, std::string> m_Registry;
+        // Key: UUID string, Value: AssetEntry
+        std::unordered_map<std::string, AssetEntry> m_Registry;
     };
 } // namespace vasset

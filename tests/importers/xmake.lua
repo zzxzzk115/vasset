@@ -19,7 +19,7 @@ target("test-importers")
     -- add rules
     add_rules("copy_resources")
 
-    set_values("resource_files", "resources/textures/awesomeface.png")
+    set_values("resource_files", "resources/textures/awesomeface.png", "resources/models/DamagedHelmet/**")
 
     -- set target directory
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/test-importers")

@@ -14,7 +14,11 @@ namespace vasset
 
         static VUUID fromString(const std::string& str);
 
+        static VUUID fromFilePath(const std::string& filePath);
+
         std::string toString() const;
+
+        bool isNil() const;
 
         bool operator==(const VUUID& other) const noexcept;
     };
@@ -28,8 +32,7 @@ namespace std
     {
         size_t operator()(const vasset::VUUID& id) const noexcept
         {
-            const uint64_t* p = reinterpret_cast<const uint64_t*>(id.bytes.data());
-            return std::hash<uint64_t>()(p[0]) ^ std::hash<uint64_t>()(p[1]);
+            return std::hash<std::string> {}(id.toString());
         }
     };
 } // namespace std

@@ -1,4 +1,4 @@
-add_requires("glm", "nlohmann_json", "stb")
+add_requires("glm", "nlohmann_json", "stb", "xxhash")
 add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
 if is_plat("windows") then
     add_requires("ktx-windows")
@@ -21,7 +21,7 @@ target("vasset")
     add_files("src/**.cpp")
 
     -- add packages
-    add_packages("glm", "nlohmann_json", "stb", "assimp", { public = true })
+    add_packages("glm", "nlohmann_json", "stb", "xxhash", "assimp", { public = true })
     if is_plat("windows") then
         add_packages("ktx-windows", { public = true })
     else

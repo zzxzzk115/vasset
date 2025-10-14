@@ -1,5 +1,6 @@
 #include "vasset/vtexture.hpp"
 
+#include <filesystem>
 #include <fstream>
 
 namespace vasset
@@ -7,6 +8,9 @@ namespace vasset
     bool saveTexture(const VTexture& texture, const std::string& filePath)
     {
         // Binary writing
+        std::filesystem::path path(filePath);
+        if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
+            std::filesystem::create_directories(path.parent_path());
         std::ofstream file(filePath, std::ios::binary);
         if (!file)
             return false;
