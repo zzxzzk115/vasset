@@ -70,7 +70,7 @@ namespace vasset
 
         bool importAssetFolder(const std::string& folderPath);
 
-        VMeshImporter& getMeshImporter() { return m_MeshImporter; }
+        VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
         VTextureImporter& getTextureImporter() { return m_TextureImporter; }
 
     private:
