@@ -22,6 +22,8 @@ namespace vasset
             }
         };
 
+        void setImportedFolder(const std::string& folder);
+
         bool registerAsset(const VUUID& uuid, const std::string& path, VAssetType type);
 
         AssetEntry lookup(const VUUID& uuid) const;
@@ -32,9 +34,11 @@ namespace vasset
 
         void load(const std::string& filename);
 
-        static std::string getImportedAssetPath(VAssetType type, const std::string& assetName);
+        std::string getImportedAssetPath(VAssetType type, const std::string& assetName) const;
 
     private:
+        std::string m_ImportedFolder {"imported"};
+
         // Key: UUID string, Value: AssetEntry
         std::unordered_map<std::string, AssetEntry> m_Registry;
     };

@@ -34,6 +34,8 @@ namespace
 
 namespace vasset
 {
+    void VAssetRegistry::setImportedFolder(const std::string& folder) { m_ImportedFolder = folder; }
+
     bool VAssetRegistry::registerAsset(const VUUID& uuid, const std::string& path, VAssetType type)
     {
         m_Registry[uuid.toString()] = {path, type};
@@ -79,7 +81,7 @@ namespace vasset
         }
     }
 
-    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, const std::string& assetName)
+    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, const std::string& assetName) const
     {
         std::string path;
 
@@ -98,17 +100,17 @@ namespace vasset
         switch (type)
         {
             case VAssetType::eTexture:
-                path = "imported/textures/" + finalAssetName + ".vtex";
+                path = m_ImportedFolder + "/textures/" + finalAssetName + ".vtex";
                 break;
             case VAssetType::eMaterial:
-                path = "imported/materials/" + finalAssetName + ".vmat";
+                path = m_ImportedFolder + "/materials/" + finalAssetName + ".vmat";
                 break;
             case VAssetType::eMesh:
-                path = "imported/meshes/" + finalAssetName + ".vmesh";
+                path = m_ImportedFolder + "/meshes/" + finalAssetName + ".vmesh";
                 break;
             case VAssetType::eUnknown:
             default:
-                path = "imported/unknown/" + finalAssetName;
+                path = m_ImportedFolder + "/unknown/" + finalAssetName;
                 break;
         }
         return path;
