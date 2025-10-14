@@ -81,7 +81,7 @@ namespace vasset
         }
     }
 
-    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, const std::string& assetName) const
+    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, const std::string& assetName, bool relative) const
     {
         std::string path;
 
@@ -100,19 +100,25 @@ namespace vasset
         switch (type)
         {
             case VAssetType::eTexture:
-                path = m_ImportedFolder + "/textures/" + finalAssetName + ".vtex";
+                path = "textures/" + finalAssetName + ".vtex";
                 break;
             case VAssetType::eMaterial:
-                path = m_ImportedFolder + "/materials/" + finalAssetName + ".vmat";
+                path = "materials/" + finalAssetName + ".vmat";
                 break;
             case VAssetType::eMesh:
-                path = m_ImportedFolder + "/meshes/" + finalAssetName + ".vmesh";
+                path = "meshes/" + finalAssetName + ".vmesh";
                 break;
             case VAssetType::eUnknown:
             default:
-                path = m_ImportedFolder + "/unknown/" + finalAssetName;
+                path = "unknown/" + finalAssetName;
                 break;
         }
+
+        if (!relative)
+        {
+            path = m_ImportedFolder + "/" + path;
+        }
+
         return path;
     }
 } // namespace vasset

@@ -185,8 +185,9 @@ namespace vasset
             return false;
 
         // Check registry
-        const std::string importedPath = m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string());
-        auto              entry        = m_Registry.lookup(VUUID::fromFilePath(importedPath));
+        const std::string relativeImportedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
+        auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
         if (entry.type != VAssetType::eUnknown)
         {
             // Load existing texture
@@ -195,7 +196,7 @@ namespace vasset
         }
 
         // Set UUID
-        outTexture.uuid = VUUID::fromFilePath(importedPath);
+        outTexture.uuid = VUUID::fromFilePath(relativeImportedPath);
 
         // Check extension
         std::string ext = osPath.extension().string();
@@ -362,12 +363,14 @@ namespace vasset
             ktxTexture_Destroy(ktxTexture(kTexture));
         }
 
+        const std::string importedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
         if (!saveTexture(outTexture, importedPath))
         {
             std::cerr << "Warning: Failed to save texture: " << importedPath << std::endl;
             return false;
         }
-        m_Registry.registerAsset(outTexture.uuid, importedPath, VAssetType::eTexture);
+        m_Registry.registerAsset(outTexture.uuid, relativeImportedPath, VAssetType::eTexture);
 
         return true;
     }
@@ -388,8 +391,9 @@ namespace vasset
             return false;
 
         // Check registry
-        const std::string importedPath = m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string());
-        auto              entry        = m_Registry.lookup(VUUID::fromFilePath(importedPath));
+        const std::string relativeImportedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
+        auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
         if (entry.type != VAssetType::eUnknown)
         {
             // Load existing mesh
@@ -398,7 +402,7 @@ namespace vasset
         }
 
         // Set UUID
-        outMesh.uuid = VUUID::fromFilePath(importedPath);
+        outMesh.uuid = VUUID::fromFilePath(relativeImportedPath);
 
         m_FilePath = filePath;
 
@@ -416,12 +420,14 @@ namespace vasset
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
 
+        const std::string importedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
         if (!saveMesh(outMesh, importedPath))
         {
             std::cerr << "Warning: Failed to save mesh: " << importedPath << std::endl;
             return false;
         }
-        m_Registry.registerAsset(outMesh.uuid, importedPath, VAssetType::eMesh);
+        m_Registry.registerAsset(outMesh.uuid, relativeImportedPath, VAssetType::eMesh);
 
         return true;
     }
@@ -537,9 +543,9 @@ namespace vasset
         if (mesh->mMaterialIndex < scene->mNumMaterials)
         {
             aiMaterial*       aiMat = scene->mMaterials[mesh->mMaterialIndex];
-            const std::string importedPath =
-                m_Registry.getImportedAssetPath(VAssetType::eMaterial, aiMat->GetName().C_Str());
-            auto uuid  = VUUID::fromFilePath(importedPath);
+            const std::string relativeImportedPath =
+                m_Registry.getImportedAssetPath(VAssetType::eMaterial, aiMat->GetName().C_Str(), true);
+            auto uuid  = VUUID::fromFilePath(relativeImportedPath);
             auto entry = m_Registry.lookup(uuid);
             if (entry.type != VAssetType::eUnknown)
             {
@@ -555,11 +561,13 @@ namespace vasset
 
                 processMaterial(aiMat, vMat);
 
+                const std::string importedPath =
+                    m_Registry.getImportedAssetPath(VAssetType::eMaterial, aiMat->GetName().C_Str(), false);
                 if (!saveMaterial(vMat, importedPath))
                 {
                     std::cerr << "Warning: Failed to save material: " << importedPath << std::endl;
                 }
-                m_Registry.registerAsset(vMat.uuid, importedPath, VAssetType::eMaterial);
+                m_Registry.registerAsset(vMat.uuid, relativeImportedPath, VAssetType::eMaterial);
                 outMesh.materials.push_back(VMaterialRef {vMat.uuid});
             }
         }

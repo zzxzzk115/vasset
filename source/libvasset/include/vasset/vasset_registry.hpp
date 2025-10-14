@@ -34,7 +34,7 @@ namespace vasset
 
         void load(const std::string& filename);
 
-        std::string getImportedAssetPath(VAssetType type, const std::string& assetName) const;
+        std::string getImportedAssetPath(VAssetType type, const std::string& assetName, bool relative) const;
 
     private:
         std::string m_ImportedFolder {"imported"};
