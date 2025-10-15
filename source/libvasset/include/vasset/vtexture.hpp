@@ -14,6 +14,7 @@ namespace vasset
     };
 
     // Directly mapped to Vulkan VkFormat values
+    // https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html
     enum class VTextureFormat : uint32_t
     {
         eUnknown = 0,
@@ -23,10 +24,10 @@ namespace vasset
         eBGR8    = 30,  // VK_FORMAT_B8G8R8_UNORM
         eRGBA16F = 97,  // VK_FORMAT_R16G16B16A16_SFLOAT
         eRGBA32F = 109, // VK_FORMAT_R32G32B32A32_SFLOAT
-        eBC1     = 131, // VK_FORMAT_BC1_RGBA_UNORM_BLOCK
-        eBC3     = 133, // VK_FORMAT_BC3_UNORM_BLOCK
-        eBC4     = 134, // VK_FORMAT_BC4_UNORM_BLOCK
-        eBC5     = 136, // VK_FORMAT_BC5_UNORM_BLOCK
+        eBC1     = 133, // VK_FORMAT_BC1_RGBA_UNORM_BLOCK
+        eBC3     = 137, // VK_FORMAT_BC3_UNORM_BLOCK
+        eBC4     = 139, // VK_FORMAT_BC4_UNORM_BLOCK
+        eBC5     = 141, // VK_FORMAT_BC5_UNORM_BLOCK
         eBC7     = 145, // VK_FORMAT_BC7_UNORM_BLOCK
     };
 
