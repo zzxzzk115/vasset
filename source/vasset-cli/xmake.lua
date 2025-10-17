@@ -16,5 +16,10 @@ target("vasset-cli")
         add_defines("NDEBUG", { public = true })
     end
 
+    -- default run arguments
+    if is_plat("windows") then
+        set_runargs("resources", "imported", "$(projectdir)")
+    end
+
     -- set target directory
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset-cli")

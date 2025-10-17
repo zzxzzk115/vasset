@@ -24,6 +24,27 @@ namespace vasset
         std::string name;
     };
 
+    struct VMeshlet
+    {
+        uint32_t vertexOffset {0};
+        uint32_t vertexCount {0};
+
+        uint32_t triangleOffset {0};
+        uint32_t triangleCount {0};
+
+        uint32_t materialIndex {0};
+
+        glm::vec3 center;
+        float     radius {0.0f};
+    };
+
+    struct VMeshletGroup
+    {
+        std::vector<VMeshlet> meshlets;
+        std::vector<uint32_t> meshletVertices;
+        std::vector<uint8_t>  meshletTriangles;
+    };
+
     struct VMesh // -> aiNode
     {
         VUUID uuid;
@@ -45,6 +66,8 @@ namespace vasset
         std::vector<VSubMesh> subMeshes;
 
         std::vector<VMaterialRef> materials;
+
+        VMeshletGroup meshletGroup;
 
         std::string name;
     };

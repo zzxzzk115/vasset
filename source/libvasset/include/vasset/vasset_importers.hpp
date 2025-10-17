@@ -42,7 +42,9 @@ namespace vasset
     {
     public:
         struct ImportOptions
-        {};
+        {
+            bool generateMeshlets {true};
+        };
 
         VMeshImporter(VAssetRegistry& registry);
 
@@ -55,6 +57,8 @@ namespace vasset
         void        processMesh(const aiMesh*, const aiScene*, VMesh& outMesh) const;
         void        processMaterial(const aiMaterial*, VMaterial& outMaterial) const;
         VTextureRef loadTexture(const aiMaterial*, aiTextureType) const;
+
+        static void generateMeshlets(VMesh& outMesh);
 
     private:
         VAssetRegistry&  m_Registry;
