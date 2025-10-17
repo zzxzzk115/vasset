@@ -11,6 +11,8 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include <meshoptimizer.h>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -420,6 +422,8 @@ namespace vasset
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
 
+        outMesh.name = scene->mRootNode->mName.C_Str();
+
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
         if (!saveMesh(outMesh, importedPath))
@@ -442,6 +446,11 @@ namespace vasset
         {
             aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
             processMesh(mesh, scene, outMesh);
+        }
+
+        if (m_Options.generateMeshlets)
+        {
+            generateMeshlets(outMesh);
         }
 
         // Then do the same for each of its children
@@ -735,6 +744,96 @@ namespace vasset
             }
         }
         return {};
+    }
+
+    void VMeshImporter::generateMeshlets(VMesh& outMesh)
+    {
+        // Extra: meshlets
+        // https://github.com/zeux/meshoptimizer/tree/v0.24#clusterization
+        outMesh.meshletGroup.meshlets.clear();
+        outMesh.meshletGroup.meshletTriangles.clear();
+        outMesh.meshletGroup.meshletVertices.clear();
+
+        const size_t maxVerts = 64;
+        const size_t maxTris  = 124;
+
+        // allocate space for meshlet vertices and triangles
+        size_t                       indexCount  = outMesh.indices.size();
+        size_t                       maxMeshlets = meshopt_buildMeshletsBound(indexCount, maxVerts, maxTris);
+        std::vector<meshopt_Meshlet> meshletsTemp(maxMeshlets);
+        outMesh.meshletGroup.meshletTriangles.resize(maxMeshlets * maxVerts);
+        outMesh.meshletGroup.meshletVertices.resize(maxMeshlets * maxTris * 3);
+
+        // build meshlets
+        size_t meshletCount = meshopt_buildMeshlets(meshletsTemp.data(),
+                                                    outMesh.meshletGroup.meshletVertices.data(),
+                                                    outMesh.meshletGroup.meshletTriangles.data(),
+                                                    outMesh.indices.data(),
+                                                    indexCount,
+                                                    reinterpret_cast<const float*>(outMesh.positions.data()),
+                                                    outMesh.vertexCount,
+                                                    sizeof(VPosition),
+                                                    maxVerts,
+                                                    maxTris,
+                                                    0.0f);
+
+        meshletsTemp.resize(meshletCount);
+
+        // copy to VMeshlet
+        for (size_t i = 0; i < meshletCount; ++i)
+        {
+            const auto& src = meshletsTemp[i];
+            VMeshlet    dst;
+            dst.vertexOffset   = src.vertex_offset;
+            dst.triangleOffset = src.triangle_offset;
+            dst.vertexCount    = src.vertex_count;
+            dst.triangleCount  = src.triangle_count;
+
+            // --- Find material index ---
+            const uint32_t*      vertBase = outMesh.meshletGroup.meshletVertices.data() + src.vertex_offset;
+            const unsigned char* triBase  = outMesh.meshletGroup.meshletTriangles.data() + src.triangle_offset;
+
+            if (src.triangle_count > 0)
+            {
+                uint8_t  i0 = triBase[0];
+                uint8_t  i1 = triBase[1];
+                uint8_t  i2 = triBase[2];
+                uint32_t v0 = vertBase[i0];
+                uint32_t v1 = vertBase[i1];
+                uint32_t v2 = vertBase[i2];
+
+                uint32_t subMeshIndex = 0;
+                for (size_t s = 0; s < outMesh.subMeshes.size(); ++s)
+                {
+                    const auto& sub   = outMesh.subMeshes[s];
+                    uint32_t    first = sub.indexOffset;
+                    uint32_t    last  = sub.indexOffset + sub.indexCount;
+                    if (v0 >= first && v0 < last)
+                    {
+                        subMeshIndex = static_cast<uint32_t>(s);
+                        break;
+                    }
+                }
+
+                dst.materialIndex = outMesh.subMeshes[subMeshIndex].materialIndex;
+            }
+            else
+            {
+                dst.materialIndex = 0;
+            }
+
+            auto bounds = meshopt_computeMeshletBounds(&outMesh.meshletGroup.meshletVertices[src.vertex_offset],
+                                                       &outMesh.meshletGroup.meshletTriangles[src.triangle_offset],
+                                                       src.triangle_count,
+                                                       reinterpret_cast<const float*>(outMesh.positions.data()),
+                                                       outMesh.vertexCount,
+                                                       sizeof(VPosition));
+
+            dst.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
+            dst.radius = bounds.radius;
+
+            outMesh.meshletGroup.meshlets.push_back(dst);
+        }
     }
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
