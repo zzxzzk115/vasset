@@ -817,6 +817,12 @@ namespace vasset
                 outMesh.meshletGroup.meshlets.push_back(dst);
             }
         }
+
+        // Resize to actual used size
+        const auto& last = outMesh.meshletGroup.meshlets.back();
+
+        outMesh.meshletGroup.meshletVertices.resize(last.vertexOffset + last.vertexCount);
+        outMesh.meshletGroup.meshletTriangles.resize(last.triangleOffset + ((last.triangleCount * 3 + 3) & ~3));
     }
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
