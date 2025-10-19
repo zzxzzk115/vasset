@@ -45,7 +45,21 @@ int main()
             VMesh       mesh {};
             if (loadMesh(meshPath, mesh))
             {
-                std::cout << "Loaded mesh: " << meshPath << " (" << mesh.name << ") with " << mesh.vertexCount << " vertices." << std::endl;
+                std::cout << "Loaded mesh: " << meshPath << " (" << mesh.name << ") with " << mesh.vertexCount
+                          << " vertices." << std::endl;
+                // Meshlets info
+                if (!mesh.meshletGroup.meshlets.empty())
+                {
+                    std::cout << "  Meshlets: " << mesh.meshletGroup.meshlets.size() << " meshlets." << std::endl;
+                    for (size_t i = 0; i < mesh.meshletGroup.meshlets.size(); ++i)
+                    {
+                        const auto& meshlet = mesh.meshletGroup.meshlets[i];
+                        std::cout << "    Meshlet " << i << ": " << meshlet.vertexCount << " vertices, "
+                                  << meshlet.triangleCount << " triangles, material index " << meshlet.materialIndex
+                                  << ", center(" << meshlet.center.x << ", " << meshlet.center.y << ", "
+                                  << meshlet.center.z << "), radius " << meshlet.radius << std::endl;
+                    }
+                }
             }
         }
     }
