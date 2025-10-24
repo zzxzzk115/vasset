@@ -749,18 +749,18 @@ namespace vasset
 
     void VMeshImporter::generateMeshlets(VMesh& outMesh)
     {
-        // Extra: meshlets
-        // https://github.com/zeux/meshoptimizer/tree/v0.24#clusterization
-        outMesh.meshletGroup.meshlets.clear();
-        outMesh.meshletGroup.meshletTriangles.clear();
-        outMesh.meshletGroup.meshletVertices.clear();
-
-        const size_t maxVerts = 64;
-        const size_t maxTris  = 124;
-
-        // --- Build meshlets per submesh to preserve correct material assignment ---
-        for (const auto& sub : outMesh.subMeshes)
+        // --- Build meshlets per submesh ---
+        for (auto& sub : outMesh.subMeshes)
         {
+            // Extra: meshlets
+            // https://github.com/zeux/meshoptimizer/tree/v0.24#clusterization
+            sub.meshletGroup.meshlets.clear();
+            sub.meshletGroup.meshletTriangles.clear();
+            sub.meshletGroup.meshletVertices.clear();
+
+            const size_t maxVerts = 64;
+            const size_t maxTris  = 124;
+
             const uint32_t* subIndices = outMesh.indices.data() + sub.indexOffset;
             size_t          subCount   = sub.indexCount;
 
@@ -769,16 +769,16 @@ namespace vasset
             std::vector<meshopt_Meshlet> meshletsTemp(maxMeshlets);
 
             // store current offsets
-            size_t baseVertOffset = outMesh.meshletGroup.meshletVertices.size();
-            size_t baseTriOffset  = outMesh.meshletGroup.meshletTriangles.size();
+            size_t baseVertOffset = sub.meshletGroup.meshletVertices.size();
+            size_t baseTriOffset  = sub.meshletGroup.meshletTriangles.size();
 
-            outMesh.meshletGroup.meshletVertices.resize(baseVertOffset + maxMeshlets * maxVerts);
-            outMesh.meshletGroup.meshletTriangles.resize(baseTriOffset + maxMeshlets * maxTris * 3);
+            sub.meshletGroup.meshletVertices.resize(baseVertOffset + maxMeshlets * maxVerts);
+            sub.meshletGroup.meshletTriangles.resize(baseTriOffset + maxMeshlets * maxTris * 3);
 
             // build meshlets
             size_t meshletCount = meshopt_buildMeshlets(meshletsTemp.data(),
-                                                        outMesh.meshletGroup.meshletVertices.data() + baseVertOffset,
-                                                        outMesh.meshletGroup.meshletTriangles.data() + baseTriOffset,
+                                                        sub.meshletGroup.meshletVertices.data() + baseVertOffset,
+                                                        sub.meshletGroup.meshletTriangles.data() + baseTriOffset,
                                                         subIndices,
                                                         subCount,
                                                         reinterpret_cast<const float*>(outMesh.positions.data()),
@@ -786,11 +786,11 @@ namespace vasset
                                                         sizeof(glm::vec3),
                                                         maxVerts,
                                                         maxTris,
-                                                        0.0f);
+                                                        0.5f);
 
             meshletsTemp.resize(meshletCount);
 
-            // copy to VMeshlet
+            // copy to Meshlet
             for (size_t i = 0; i < meshletCount; ++i)
             {
                 const auto& src = meshletsTemp[i];
@@ -804,25 +804,28 @@ namespace vasset
                 // --- Assign material index directly from submesh ---
                 dst.materialIndex = sub.materialIndex;
 
-                auto bounds = meshopt_computeMeshletBounds(&outMesh.meshletGroup.meshletVertices[dst.vertexOffset],
-                                                           &outMesh.meshletGroup.meshletTriangles[dst.triangleOffset],
+                auto bounds = meshopt_computeMeshletBounds(&sub.meshletGroup.meshletVertices[dst.vertexOffset],
+                                                           &sub.meshletGroup.meshletTriangles[dst.triangleOffset],
                                                            dst.triangleCount,
                                                            reinterpret_cast<const float*>(outMesh.positions.data()),
                                                            outMesh.positions.size(),
                                                            sizeof(glm::vec3));
 
-                dst.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
-                dst.radius = bounds.radius;
+                dst.center     = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
+                dst.radius     = bounds.radius;
+                dst.coneAxis   = glm::vec3(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2]);
+                dst.coneCutoff = bounds.cone_cutoff;
+                dst.coneApex   = glm::vec3(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2]);
 
-                outMesh.meshletGroup.meshlets.push_back(dst);
+                sub.meshletGroup.meshlets.push_back(dst);
             }
+
+            // Resize to actual used size
+            const auto& last = sub.meshletGroup.meshlets.back();
+
+            sub.meshletGroup.meshletVertices.resize(last.vertexOffset + last.vertexCount);
+            sub.meshletGroup.meshletTriangles.resize(last.triangleOffset + ((last.triangleCount * 3 + 3) & ~3));
         }
-
-        // Resize to actual used size
-        const auto& last = outMesh.meshletGroup.meshlets.back();
-
-        outMesh.meshletGroup.meshletVertices.resize(last.vertexOffset + last.vertexCount);
-        outMesh.meshletGroup.meshletTriangles.resize(last.triangleOffset + ((last.triangleCount * 3 + 3) & ~3));
     }
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :

@@ -78,6 +78,42 @@ namespace vasset
             // 4 bytes for material index
             file.write(reinterpret_cast<const char*>(&subMesh.materialIndex), sizeof(subMesh.materialIndex));
 
+            // 4 bytes for length of meshlets
+            uint32_t meshletCount = static_cast<uint32_t>(subMesh.meshletGroup.meshlets.size());
+            file.write(reinterpret_cast<const char*>(&meshletCount), sizeof(uint32_t));
+
+            // N meshlets
+            for (const auto& meshlet : subMesh.meshletGroup.meshlets)
+            {
+                file.write(reinterpret_cast<const char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
+                file.write(reinterpret_cast<const char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
+                file.write(reinterpret_cast<const char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
+                file.write(reinterpret_cast<const char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
+                file.write(reinterpret_cast<const char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
+                file.write(reinterpret_cast<const char*>(&meshlet.center), sizeof(meshlet.center));
+                file.write(reinterpret_cast<const char*>(&meshlet.radius), sizeof(meshlet.radius));
+            }
+
+            // 4 bytes for length of meshlet vertices
+            uint32_t meshletVertexCount = static_cast<uint32_t>(subMesh.meshletGroup.meshletVertices.size());
+            file.write(reinterpret_cast<const char*>(&meshletVertexCount), sizeof(uint32_t));
+
+            // N meshlet vertices
+            for (const auto& vertex : subMesh.meshletGroup.meshletVertices)
+            {
+                file.write(reinterpret_cast<const char*>(&vertex), sizeof(vertex));
+            }
+
+            // 4 bytes for length of meshlet triangles
+            uint32_t meshletTriangleCount = static_cast<uint32_t>(subMesh.meshletGroup.meshletTriangles.size());
+            file.write(reinterpret_cast<const char*>(&meshletTriangleCount), sizeof(uint32_t));
+
+            // N meshlet triangles
+            for (const auto& triangle : subMesh.meshletGroup.meshletTriangles)
+            {
+                file.write(reinterpret_cast<const char*>(&triangle), sizeof(triangle));
+            }
+
             // 4 bytes for name length
             uint32_t nameLength = static_cast<uint32_t>(subMesh.name.size());
             file.write(reinterpret_cast<const char*>(&nameLength), sizeof(nameLength));
@@ -95,42 +131,6 @@ namespace vasset
         {
             // 16 bytes for material UUID
             file.write(reinterpret_cast<const char*>(&material.uuid), sizeof(material.uuid));
-        }
-
-        // 4 bytes for length of meshlets
-        uint32_t meshletCount = static_cast<uint32_t>(mesh.meshletGroup.meshlets.size());
-        file.write(reinterpret_cast<const char*>(&meshletCount), sizeof(uint32_t));
-
-        // N meshlets
-        for (const auto& meshlet : mesh.meshletGroup.meshlets)
-        {
-            file.write(reinterpret_cast<const char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
-            file.write(reinterpret_cast<const char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
-            file.write(reinterpret_cast<const char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
-            file.write(reinterpret_cast<const char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
-            file.write(reinterpret_cast<const char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
-            file.write(reinterpret_cast<const char*>(&meshlet.center), sizeof(meshlet.center));
-            file.write(reinterpret_cast<const char*>(&meshlet.radius), sizeof(meshlet.radius));
-        }
-
-        // 4 bytes for length of meshlet vertices
-        uint32_t meshletVertexCount = static_cast<uint32_t>(mesh.meshletGroup.meshletVertices.size());
-        file.write(reinterpret_cast<const char*>(&meshletVertexCount), sizeof(uint32_t));
-
-        // N meshlet vertices
-        for (const auto& vertex : mesh.meshletGroup.meshletVertices)
-        {
-            file.write(reinterpret_cast<const char*>(&vertex), sizeof(vertex));
-        }
-
-        // 4 bytes for length of meshlet triangles
-        uint32_t meshletTriangleCount = static_cast<uint32_t>(mesh.meshletGroup.meshletTriangles.size());
-        file.write(reinterpret_cast<const char*>(&meshletTriangleCount), sizeof(uint32_t));
-
-        // N meshlet triangles
-        for (const auto& triangle : mesh.meshletGroup.meshletTriangles)
-        {
-            file.write(reinterpret_cast<const char*>(&triangle), sizeof(triangle));
         }
 
         // name
@@ -225,6 +225,45 @@ namespace vasset
             // 4 bytes for material index
             file.read(reinterpret_cast<char*>(&subMesh.materialIndex), sizeof(subMesh.materialIndex));
 
+            // 4 bytes for length of meshlets
+            uint32_t meshletCount = 0;
+            file.read(reinterpret_cast<char*>(&meshletCount), sizeof(meshletCount));
+            subMesh.meshletGroup.meshlets.resize(meshletCount);
+
+            // N meshlets
+            for (auto& meshlet : subMesh.meshletGroup.meshlets)
+            {
+                file.read(reinterpret_cast<char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
+                file.read(reinterpret_cast<char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
+                file.read(reinterpret_cast<char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
+                file.read(reinterpret_cast<char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
+                file.read(reinterpret_cast<char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
+                file.read(reinterpret_cast<char*>(&meshlet.center), sizeof(meshlet.center));
+                file.read(reinterpret_cast<char*>(&meshlet.radius), sizeof(meshlet.radius));
+            }
+
+            // 4 bytes for length of meshlet vertices
+            uint32_t meshletVertexCount = 0;
+            file.read(reinterpret_cast<char*>(&meshletVertexCount), sizeof(meshletVertexCount));
+            subMesh.meshletGroup.meshletVertices.resize(meshletVertexCount);
+
+            // N meshlet vertices
+            for (auto& vertex : subMesh.meshletGroup.meshletVertices)
+            {
+                file.read(reinterpret_cast<char*>(&vertex), sizeof(vertex));
+            }
+
+            // 4 bytes for length of meshlet triangles
+            uint32_t meshletTriangleCount = 0;
+            file.read(reinterpret_cast<char*>(&meshletTriangleCount), sizeof(meshletTriangleCount));
+            subMesh.meshletGroup.meshletTriangles.resize(meshletTriangleCount);
+
+            // N meshlet triangles
+            for (auto& triangle : subMesh.meshletGroup.meshletTriangles)
+            {
+                file.read(reinterpret_cast<char*>(&triangle), sizeof(triangle));
+            }
+
             // 4 bytes for name length
             uint32_t nameLength = 0;
             file.read(reinterpret_cast<char*>(&nameLength), sizeof(nameLength));
@@ -243,45 +282,6 @@ namespace vasset
         {
             // 16 bytes for material UUID
             file.read(reinterpret_cast<char*>(&material.uuid), sizeof(material.uuid));
-        }
-
-        // 4 bytes for length of meshlets
-        uint32_t meshletCount = 0;
-        file.read(reinterpret_cast<char*>(&meshletCount), sizeof(meshletCount));
-        outMesh.meshletGroup.meshlets.resize(meshletCount);
-
-        // N meshlets
-        for (auto& meshlet : outMesh.meshletGroup.meshlets)
-        {
-            file.read(reinterpret_cast<char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
-            file.read(reinterpret_cast<char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
-            file.read(reinterpret_cast<char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
-            file.read(reinterpret_cast<char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
-            file.read(reinterpret_cast<char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
-            file.read(reinterpret_cast<char*>(&meshlet.center), sizeof(meshlet.center));
-            file.read(reinterpret_cast<char*>(&meshlet.radius), sizeof(meshlet.radius));
-        }
-
-        // 4 bytes for length of meshlet vertices
-        uint32_t meshletVertexCount = 0;
-        file.read(reinterpret_cast<char*>(&meshletVertexCount), sizeof(meshletVertexCount));
-        outMesh.meshletGroup.meshletVertices.resize(meshletVertexCount);
-
-        // N meshlet vertices
-        for (auto& vertex : outMesh.meshletGroup.meshletVertices)
-        {
-            file.read(reinterpret_cast<char*>(&vertex), sizeof(vertex));
-        }
-
-        // 4 bytes for length of meshlet triangles
-        uint32_t meshletTriangleCount = 0;
-        file.read(reinterpret_cast<char*>(&meshletTriangleCount), sizeof(meshletTriangleCount));
-        outMesh.meshletGroup.meshletTriangles.resize(meshletTriangleCount);
-
-        // N meshlet triangles
-        for (auto& triangle : outMesh.meshletGroup.meshletTriangles)
-        {
-            file.read(reinterpret_cast<char*>(&triangle), sizeof(triangle));
         }
 
         // name
