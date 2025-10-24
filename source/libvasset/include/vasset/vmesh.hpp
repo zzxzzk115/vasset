@@ -11,6 +11,36 @@
 
 namespace vasset
 {
+    struct alignas(16) VMeshlet
+    {
+        uint32_t vertexOffset {0};
+        uint32_t vertexCount {0};
+        uint32_t triangleOffset {0};
+        uint32_t triangleCount {0};
+
+        uint32_t materialIndex {0};
+        uint32_t paddingU0 {0}; // ensure 16-byte alignment
+        uint32_t paddingU1 {0}; // ensure 16-byte alignment
+        uint32_t paddingU2 {0}; // ensure 16-byte alignment
+
+        glm::vec3 center;
+        float     radius {0.0f};
+
+        glm::vec3 coneAxis;
+        float     coneCutoff {0.0f}; // cosine of the cone cutoff angle
+
+        glm::vec3 coneApex;
+        float     paddingF0; // ensure 16-byte alignment
+    };
+    static_assert(sizeof(VMeshlet) % 16 == 0);
+
+    struct VMeshletGroup
+    {
+        std::vector<VMeshlet> meshlets;
+        std::vector<uint32_t> meshletVertices;
+        std::vector<uint8_t>  meshletTriangles;
+    };
+
     struct VSubMesh // -> aiMesh
     {
         uint32_t vertexOffset {0};
@@ -21,28 +51,9 @@ namespace vasset
 
         uint32_t materialIndex {0};
 
+        VMeshletGroup meshletGroup;
+
         std::string name;
-    };
-
-    struct VMeshlet
-    {
-        uint32_t vertexOffset {0};
-        uint32_t vertexCount {0};
-
-        uint32_t triangleOffset {0};
-        uint32_t triangleCount {0};
-
-        uint32_t materialIndex {0};
-
-        glm::vec3 center;
-        float     radius {0.0f};
-    };
-
-    struct VMeshletGroup
-    {
-        std::vector<VMeshlet> meshlets;
-        std::vector<uint32_t> meshletVertices;
-        std::vector<uint8_t>  meshletTriangles;
     };
 
     struct VMesh // -> aiNode
@@ -66,8 +77,6 @@ namespace vasset
         std::vector<VSubMesh> subMeshes;
 
         std::vector<VMaterialRef> materials;
-
-        VMeshletGroup meshletGroup;
 
         std::string name;
     };

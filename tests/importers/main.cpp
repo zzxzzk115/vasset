@@ -47,17 +47,22 @@ int main()
             {
                 std::cout << "Loaded mesh: " << meshPath << " (" << mesh.name << ") with " << mesh.vertexCount
                           << " vertices." << std::endl;
-                // Meshlets info
-                if (!mesh.meshletGroup.meshlets.empty())
+
+                for (const auto& subMesh : mesh.subMeshes)
                 {
-                    std::cout << "  Meshlets: " << mesh.meshletGroup.meshlets.size() << " meshlets." << std::endl;
-                    for (size_t i = 0; i < mesh.meshletGroup.meshlets.size(); ++i)
+                    // Meshlets info
+                    if (!subMesh.meshletGroup.meshlets.empty())
                     {
-                        const auto& meshlet = mesh.meshletGroup.meshlets[i];
-                        std::cout << "    Meshlet " << i << ": " << meshlet.vertexCount << " vertices, "
-                                  << meshlet.triangleCount << " triangles, material index " << meshlet.materialIndex
-                                  << ", center(" << meshlet.center.x << ", " << meshlet.center.y << ", "
-                                  << meshlet.center.z << "), radius " << meshlet.radius << std::endl;
+                        std::cout << "  Meshlets: " << subMesh.meshletGroup.meshlets.size() << " meshlets."
+                                  << std::endl;
+                        for (size_t j = 0; j < subMesh.meshletGroup.meshlets.size(); ++j)
+                        {
+                            const auto& meshlet = subMesh.meshletGroup.meshlets[j];
+                            std::cout << "    Meshlet " << j << ": " << meshlet.vertexCount << " vertices, "
+                                      << meshlet.triangleCount << " triangles, material index " << meshlet.materialIndex
+                                      << ", center(" << meshlet.center.x << ", " << meshlet.center.y << ", "
+                                      << meshlet.center.z << "), radius " << meshlet.radius << std::endl;
+                        }
                     }
                 }
             }
