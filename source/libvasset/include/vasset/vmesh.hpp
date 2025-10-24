@@ -81,6 +81,11 @@ namespace vasset
         std::string name;
     };
 
-    bool saveMesh(const VMesh& mesh, const std::string& filePath);
+    struct VMeshMeta
+    {
+        VUUID uuid;
+    };
+
+    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::string& metaFilePath);
     bool loadMesh(const std::string& filePath, VMesh& outMesh);
 } // namespace vasset

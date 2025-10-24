@@ -1,11 +1,13 @@
 #include "vasset/vmesh.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 
 namespace vasset
 {
-    bool saveMesh(const VMesh& mesh, const std::string& filePath)
+    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::string& metaFilePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
@@ -139,6 +141,17 @@ namespace vasset
         file.write(mesh.name.c_str(), nameLength);
 
         file.close();
+
+        // Save meta file as json by nlohmann_json
+        VMeshMeta meta {};
+        meta.uuid = mesh.uuid;
+        std::ofstream metaFile(metaFilePath);
+        if (!metaFile)
+            return false;
+        metaFile << nlohmann::json {
+            {"uuid", meta.uuid.toString()},
+        };
+        metaFile.close();
 
         return true;
     }

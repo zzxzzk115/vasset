@@ -76,6 +76,11 @@ namespace vasset
         }
     };
 
-    bool saveTexture(const VTexture& texture, const std::string& filePath);
+    struct VTextureMeta
+    {
+        VUUID uuid;
+    };
+
+    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::string& metaFilePath);
     bool loadTexture(const std::string& filePath, VTexture& outTexture);
 } // namespace vasset

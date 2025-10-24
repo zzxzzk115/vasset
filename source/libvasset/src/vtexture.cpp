@@ -1,11 +1,13 @@
 #include "vasset/vtexture.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 
 namespace vasset
 {
-    bool saveTexture(const VTexture& texture, const std::string& filePath)
+    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::string& metaFilePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
@@ -60,6 +62,17 @@ namespace vasset
         file.write(reinterpret_cast<const char*>(texture.data.data()), dataSize);
 
         file.close();
+
+        // Save meta file as json by nlohmann_json
+        VTextureMeta meta {};
+        meta.uuid = texture.uuid;
+        std::ofstream metaFile(metaFilePath);
+        if (!metaFile)
+            return false;
+        metaFile << nlohmann::json {
+            {"uuid", meta.uuid.toString()},
+        };
+        metaFile.close();
 
         return true;
     }
