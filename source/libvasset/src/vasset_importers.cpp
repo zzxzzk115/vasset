@@ -6,6 +6,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#define DDSKTX_IMPLEMENT
+#include <dds-ktx.h>
+
+#define TINYEXR_IMPLEMENTATION
+#include <tinyexr.h>
+
 #include <assimp/GltfMaterial.h>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -18,6 +24,140 @@
 #include <iostream>
 #include <unordered_map>
 #include <variant>
+
+namespace
+{
+    bool isEXR(const std::string& ext) { return ext == ".exr"; }
+
+    bool isSTB(const std::string& ext)
+    {
+        return ext == ".hdr" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
+               ext == ".gif" || ext == ".psd" || ext == ".pic";
+    }
+
+    bool isKTXDDS(const std::string& ext) { return ext == ".ktx" || ext == ".dds"; }
+
+    bool isKTX2(const std::string& ext) { return ext == ".ktx2"; }
+
+    bool isCompressedTexture(const std::string& ext) { return isKTXDDS(ext) || isKTX2(ext); }
+
+    bool isValidTexture(const std::string& ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
+
+    bool isValidModel(const std::string& ext)
+    {
+        return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
+    }
+
+    vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
+    {
+        switch (format)
+        {
+            case DDSKTX_FORMAT_BC1:
+                return vasset::VTextureFormat::eBC1;
+            case DDSKTX_FORMAT_BC2:
+                return vasset::VTextureFormat::eBC2;
+            case DDSKTX_FORMAT_BC3:
+                return vasset::VTextureFormat::eBC3;
+            case DDSKTX_FORMAT_BC4:
+                return vasset::VTextureFormat::eBC4;
+            case DDSKTX_FORMAT_BC5:
+                return vasset::VTextureFormat::eBC5;
+            case DDSKTX_FORMAT_BC6H:
+                return vasset::VTextureFormat::eBC6H;
+            case DDSKTX_FORMAT_BC7:
+                return vasset::VTextureFormat::eBC7;
+            case DDSKTX_FORMAT_ETC2:
+                return vasset::VTextureFormat::eETC2;
+            case DDSKTX_FORMAT_ETC2A:
+                return vasset::VTextureFormat::eETC2A;
+            case DDSKTX_FORMAT_ETC2A1:
+                return vasset::VTextureFormat::eETC2A1;
+            case DDSKTX_FORMAT_PTC12A:
+                return vasset::VTextureFormat::ePTC12A;
+            case DDSKTX_FORMAT_PTC14A:
+                return vasset::VTextureFormat::ePTC14A;
+            case DDSKTX_FORMAT_PTC12:
+                return vasset::VTextureFormat::ePTC12;
+            case DDSKTX_FORMAT_PTC14:
+                return vasset::VTextureFormat::ePTC14;
+            case DDSKTX_FORMAT_PTC22:
+                return vasset::VTextureFormat::ePTC22;
+            case DDSKTX_FORMAT_PTC24:
+                return vasset::VTextureFormat::ePTC24;
+            case DDSKTX_FORMAT_ASTC4x4:
+                return vasset::VTextureFormat::eASTC_4x4;
+            case DDSKTX_FORMAT_ASTC5x5:
+                return vasset::VTextureFormat::eASTC_5x5;
+            case DDSKTX_FORMAT_ASTC6x6:
+                return vasset::VTextureFormat::eASTC_6x6;
+            case DDSKTX_FORMAT_ASTC8x5:
+                return vasset::VTextureFormat::eASTC_8x5;
+            case DDSKTX_FORMAT_ASTC8x6:
+                return vasset::VTextureFormat::eASTC_8x6;
+            case DDSKTX_FORMAT_ASTC10x5:
+                return vasset::VTextureFormat::eASTC_10x5;
+            case DDSKTX_FORMAT_A8:
+                return vasset::VTextureFormat::eA8;
+            case DDSKTX_FORMAT_R8:
+                return vasset::VTextureFormat::eR8;
+            case DDSKTX_FORMAT_RGBA8:
+                return vasset::VTextureFormat::eRGBA8;
+            case DDSKTX_FORMAT_RGBA8S:
+                return vasset::VTextureFormat::eRGBA8S;
+            case DDSKTX_FORMAT_RG16:
+                return vasset::VTextureFormat::eRG16;
+            case DDSKTX_FORMAT_RGB8:
+                return vasset::VTextureFormat::eRGB8;
+            case DDSKTX_FORMAT_R16:
+                return vasset::VTextureFormat::eR16;
+            case DDSKTX_FORMAT_R32F:
+                return vasset::VTextureFormat::eR32F;
+            case DDSKTX_FORMAT_R16F:
+                return vasset::VTextureFormat::eR16F;
+            case DDSKTX_FORMAT_RG16F:
+                return vasset::VTextureFormat::eRG16F;
+            case DDSKTX_FORMAT_RG16S:
+                return vasset::VTextureFormat::eRG16S;
+            case DDSKTX_FORMAT_RGBA16F:
+                return vasset::VTextureFormat::eRGBA16F;
+            case DDSKTX_FORMAT_RGBA16:
+                return vasset::VTextureFormat::eRGBA16;
+            case DDSKTX_FORMAT_BGRA8:
+                return vasset::VTextureFormat::eBGRA8;
+            case DDSKTX_FORMAT_RGB10A2:
+                return vasset::VTextureFormat::eA2RGB10;
+            case DDSKTX_FORMAT_RG11B10F:
+                return vasset::VTextureFormat::eB10RG11;
+            case DDSKTX_FORMAT_RG8:
+                return vasset::VTextureFormat::eRG8;
+            case DDSKTX_FORMAT_RG8S:
+                return vasset::VTextureFormat::eRG8S;
+            case _DDSKTX_FORMAT_COMPRESSED:
+                throw std::runtime_error {"Undefined compressed format."};
+            case DDSKTX_FORMAT_ETC1:
+                throw std::runtime_error {"ETC1 format is not supported."};
+            case DDSKTX_FORMAT_ATC:
+            case DDSKTX_FORMAT_ATCE:
+            case DDSKTX_FORMAT_ATCI:
+                throw std::runtime_error {"ATC formats are not supported."};
+            default:
+                return vasset::VTextureFormat::eUnknown;
+        }
+    }
+
+    std::vector<uint8_t> readAll(const std::filesystem::path& p)
+    {
+        std::ifstream f(p, std::ios::binary | std::ios::ate);
+        if (!f)
+            return {};
+        const size_t         sz = static_cast<size_t>(f.tellg());
+        std::vector<uint8_t> data(sz);
+        f.seekg(0);
+        if (!f.read(reinterpret_cast<char*>(data.data()), sz))
+            return {};
+        return data;
+    }
+} // namespace
 
 namespace
 {
@@ -202,7 +342,44 @@ namespace vasset
 
         // Check extension
         std::string ext = osPath.extension().string();
-        if (ext == ".ktx2")
+        if (isKTXDDS(ext))
+        {
+            auto pathStr = osPath.string();
+
+#ifndef _WIN32
+            // Ensure the path is in the correct format for KTX/DDS parsing
+            // \\ -> /
+            std::replace(pathStr.begin(), pathStr.end(), '\\', '/');
+#endif
+
+            auto path = std::filesystem::path {pathStr};
+
+            // C++ file I/O
+            auto fileBytes = readAll(path);
+            if (fileBytes.empty())
+                return false;
+
+            ddsktx_texture_info tc {0};
+
+            if (!ddsktx_parse(&tc, fileBytes.data(), static_cast<int>(fileBytes.size()), nullptr))
+            {
+                return false;
+            }
+
+            // Fill outTexture
+            outTexture.width           = static_cast<uint32_t>(tc.width);
+            outTexture.height          = static_cast<uint32_t>(tc.height);
+            outTexture.depth           = static_cast<uint32_t>(tc.depth);
+            outTexture.mipLevels       = tc.num_mips;
+            outTexture.arrayLayers     = tc.num_layers;
+            outTexture.isCubemap       = (tc.flags & DDSKTX_TEXTURE_FLAG_CUBEMAP) != 0;
+            outTexture.generateMipmaps = m_Options.generateMipmaps;
+            outTexture.type            = VTextureDimension::e2D;
+            outTexture.format          = toVTextureFormat(tc.format);
+            outTexture.fileFormat      = (ext == ".ktx") ? VTextureFileFormat::eKTX : VTextureFileFormat::eDDS;
+            outTexture.data.assign(fileBytes.begin(), fileBytes.end());
+        }
+        else if (isKTX2(ext))
         {
             // Read KTX2 file
             std::ifstream file(filePath, std::ios::binary | std::ios::ate);
@@ -249,35 +426,75 @@ namespace vasset
         }
         else
         {
-            // Load image file
-            auto* file = stbi__fopen(filePath.c_str(), "rb");
-            if (!file)
-            {
-                return false;
-            }
-
-            const auto hdr = stbi_is_hdr_from_file(file);
-
             // Load as raw image
-            int width, height, channels;
-
-            stbi_set_flip_vertically_on_load(m_Options.flipY ? 1 : 0);
-
+            int   width, height, channels;
             void* pixels = nullptr;
-            if (hdr)
+            bool  hdr    = false;
+
+            if (isEXR(ext))
             {
-                pixels = stbi_loadf_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                // Supported by tinyexr
+                const char* err = nullptr;
+                float*      img = nullptr;
+
+                if (LoadEXR(&img, &width, &height, osPath.string().c_str(), &err) != TINYEXR_SUCCESS)
+                {
+                    if (err)
+                    {
+                        std::cerr << "Failed to load EXR image: " << err << std::endl;
+                        FreeEXRErrorMessage(err);
+                    }
+                    return false;
+                }
+
+                channels = 4; // RGBA
+                pixels   = img;
+                hdr      = true;
+            }
+            else if (isSTB(ext))
+            {
+                // Load image file
+                auto* file = fopen(filePath.c_str(), "rb");
+                if (!file)
+                {
+                    return false;
+                }
+
+                // Supported by stb_image
+                hdr = stbi_is_hdr_from_file(file);
+
+                stbi_set_flip_vertically_on_load(m_Options.flipY ? 1 : 0);
+
+                if (hdr)
+                {
+                    pixels = stbi_loadf_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                }
+                else
+                {
+                    pixels = stbi_load_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                }
+                fclose(file);
+                if (!pixels)
+                    return false;
             }
             else
             {
-                pixels = stbi_load_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
-            }
-            fclose(file);
-            if (!pixels)
+                std::cerr << "Unsupported image format: " << ext << std::endl;
                 return false;
+            }
+
+            auto targetFormat = m_Options.targetTextureFileFormat;
+
+            if (targetFormat == VTextureFileFormat::eKTX || targetFormat == VTextureFileFormat::eDDS)
+            {
+                std::cerr << "Warning: Target texture file format KTX or DDS is not supported for image files. "
+                             "Defaulting to KTX2."
+                          << std::endl;
+                targetFormat = VTextureFileFormat::eKTX2;
+            }
 
             // Load other image formats
-            if (m_Options.targetTextureFileFormat != VTextureFileFormat::eKTX2)
+            if (targetFormat != VTextureFileFormat::eKTX2)
             {
                 // Fill outTexture
                 outTexture.width           = width;
@@ -849,8 +1066,7 @@ namespace vasset
                 std::string filePath = entry.path().string();
                 std::string ext      = entry.path().extension().string();
 
-                if (ext == ".ktx2" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
-                    ext == ".tga")
+                if (isValidTexture(ext))
                 {
                     VTexture texture;
                     if (m_TextureImporter.importTexture(filePath, texture))
@@ -862,7 +1078,7 @@ namespace vasset
                         std::cerr << "Failed to import texture: " << filePath << std::endl;
                     }
                 }
-                else if (ext == ".gltf" || ext == ".obj" || ext == ".fbx" || ext == ".dae")
+                else if (isValidModel(ext))
                 {
                     VMesh mesh;
                     if (m_MeshImporter.importMesh(filePath, mesh))
@@ -874,10 +1090,10 @@ namespace vasset
                         std::cerr << "Failed to import mesh: " << filePath << std::endl;
                     }
                 }
-                else
-                {
-                    std::cout << "Unsupported file type, skipping: " << filePath << std::endl;
-                }
+                // else
+                // {
+                //     std::cout << "Unsupported file type, skipping: " << filePath << std::endl;
+                // }
             }
             else if (entry.is_directory())
             {
