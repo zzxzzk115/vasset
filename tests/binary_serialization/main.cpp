@@ -62,7 +62,7 @@ TEST(MeshSerialization, BasicSerialization)
     mesh.materials.push_back(matRef);
 
     // Serialize to binary
-    bool result = saveMesh(mesh, "test_mesh.vmesh");
+    bool result = saveMesh(mesh, "test_mesh.vmesh", "test_mesh.vmeta");
     ASSERT_TRUE(result);
 
     // Deserialize from binary
@@ -107,7 +107,7 @@ TEST(TextureSerialization, BasicSerialization)
     texture.data.resize(texture.width * texture.height * 4, 255);
 
     // Serialize to binary
-    bool result = saveTexture(texture, "test_texture.vtex");
+    bool result = saveTexture(texture, "test_texture.vtex", "test_texture.vmeta");
     ASSERT_TRUE(result);
 
     // Deserialize from binary
@@ -135,6 +135,14 @@ TEST(UUID, FilePath)
     VUUID       uuid3 = VUUID::fromFilePath(differentPath);
     ASSERT_NE(uuid1, uuid3); // Different paths should yield different UUIDs
     ASSERT_FALSE(uuid3.isNil());
+}
+
+TEST(UUID, StringConversion)
+{
+    VUUID       originalUUID = VUUID::generate();
+    std::string uuidStr      = originalUUID.toString();
+    VUUID       parsedUUID   = VUUID::fromString(uuidStr);
+    ASSERT_EQ(originalUUID, parsedUUID); // Conversion to string and back should yield same UUID
 }
 
 int main(int argc, char** argv)
