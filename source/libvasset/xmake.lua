@@ -1,4 +1,4 @@
-add_requires("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer")
+add_requires("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "tinyexr")
 add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
 if is_plat("windows") then
     add_requires("ktx-windows")
@@ -20,8 +20,11 @@ target("vasset")
     -- add source files
     add_files("src/**.cpp")
 
+    -- add deps
+    add_deps("dds-ktx", {public = true})
+
     -- add packages
-    add_packages("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "assimp", { public = true })
+    add_packages("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "tinyexr", "assimp", { public = true })
     if is_plat("windows") then
         add_packages("ktx-windows", { public = true })
     else
@@ -34,6 +37,12 @@ target("vasset")
     else
         add_defines("NDEBUG", { public = true })
     end
+
+    -- GLM force settings
+    add_defines("GLM_FORCE_DEPTH_ZERO_TO_ONE", { public = true }) -- for vulkan depth range [0, 1]
+    -- add_defines("GLM_FORCE_LEFT_HANDED", { public = true }) -- for left-handed coordinate system
+    add_defines("GLM_ENABLE_EXPERIMENTAL", { public = true }) -- for experimental features
+    add_defines("GLM_FORCE_RADIANS", { public = true }) -- force radians
 
     -- set target directory
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset")

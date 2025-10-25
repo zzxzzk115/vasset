@@ -96,6 +96,9 @@ add_rules("clangd.config")
 -- add repositories
 add_repositories("my-xmake-repo https://github.com/zzxzzk115/xmake-repo.git backup")
 
+-- include external
+includes("external")
+
 -- include source
 includes("source")
 
