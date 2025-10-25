@@ -57,6 +57,14 @@ namespace vasset
         return id;
     }
 
+    VUUID VUUID::fromName(const std::string& str)
+    {
+        XXH128_hash_t h = XXH3_128bits(str.data(), str.size());
+        VUUID         id;
+        std::memcpy(id.bytes.data(), &h, sizeof(h));
+        return id;
+    }
+
     std::string VUUID::toString() const
     {
         std::ostringstream ss;
@@ -75,4 +83,11 @@ namespace vasset
     }
 
     bool VUUID::operator==(const VUUID& other) const noexcept { return bytes == other.bytes; }
+
+    bool VUUID::operator!=(const VUUID& other) const noexcept { return !(*this == other); }
+
+    bool VUUID::operator<(const VUUID& other) const noexcept
+    {
+        return std::lexicographical_compare(bytes.begin(), bytes.end(), other.bytes.begin(), other.bytes.end());
+    }
 } // namespace vasset
