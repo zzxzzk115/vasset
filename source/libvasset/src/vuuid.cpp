@@ -22,16 +22,26 @@ namespace vasset
 
     VUUID VUUID::fromString(const std::string& str)
     {
-        VUUID             id {};
-        std::stringstream ss(str);
-        for (int i = 0; i < 16; ++i)
+        VUUID       id {};
+        std::string hexStr;
+
+        for (char c : str)
         {
-            unsigned int value;
-            ss >> std::hex >> value;
-            id.bytes[i] = static_cast<uint8_t>(value);
-            if (ss.peek() == '-' || ss.peek() == ' ')
-                ss.ignore();
+            if (std::isxdigit(static_cast<unsigned char>(c)))
+                hexStr += c;
         }
+
+        if (hexStr.size() != 32)
+        {
+            return id;
+        }
+
+        for (size_t i = 0; i < 16; ++i)
+        {
+            std::string byteStr = hexStr.substr(i * 2, 2);
+            id.bytes[i]         = static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16));
+        }
+
         return id;
     }
 
