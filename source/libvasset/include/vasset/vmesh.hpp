@@ -61,7 +61,7 @@ namespace vasset
         VUUID uuid;
 
         uint32_t     vertexCount {0};
-        VVertexFlags vertexFlags {VVertexFlags::eGeneral};
+        VVertexFlags vertexFlags {VVertexFlags::eNone};
 
         std::vector<VPosition>     positions;
         std::vector<VNormal>       normals;
