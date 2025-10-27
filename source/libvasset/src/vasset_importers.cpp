@@ -646,6 +646,20 @@ namespace vasset
             generateMeshlets(outMesh);
         }
 
+        // Set vertex flags
+        outMesh.vertexFlags |= VVertexFlags::ePosition;
+        if (outMesh.normals.size() == outMesh.vertexCount)
+            outMesh.vertexFlags |= VVertexFlags::eNormal;
+        if (outMesh.colors.size() == outMesh.vertexCount)
+            outMesh.vertexFlags |= VVertexFlags::eColor;
+        if (outMesh.texCoords0.size() == outMesh.vertexCount)
+            outMesh.vertexFlags |= VVertexFlags::eTexCoord0;
+        if (outMesh.texCoords1.size() == outMesh.vertexCount)
+            outMesh.vertexFlags |= VVertexFlags::eTexCoord1;
+        if (outMesh.tangents.size() == outMesh.vertexCount)
+            outMesh.vertexFlags |= VVertexFlags::eTangent;
+        // Note: Joint indices and weights would require additional processing, e.g., from bones
+
         outMesh.name = scene->mRootNode->mName.C_Str();
 
         const std::string importedPath =
@@ -803,18 +817,6 @@ namespace vasset
 
         outMesh.subMeshes.push_back(subMesh);
         outMesh.vertexCount += mesh->mNumVertices;
-        outMesh.vertexFlags |= VVertexFlags::ePosition;
-        if (mesh->HasNormals())
-            outMesh.vertexFlags |= VVertexFlags::eNormal;
-        if (mesh->HasVertexColors(0))
-            outMesh.vertexFlags |= VVertexFlags::eColor;
-        if (mesh->HasTextureCoords(0))
-            outMesh.vertexFlags |= VVertexFlags::eTexCoord0;
-        if (mesh->HasTextureCoords(1))
-            outMesh.vertexFlags |= VVertexFlags::eTexCoord1;
-        if (mesh->HasTangentsAndBitangents())
-            outMesh.vertexFlags |= VVertexFlags::eTangent;
-        // Note: Joint indices and weights would require additional processing, e.g., from bones
     }
 
     void VMeshImporter::processMaterial(const aiMaterial* material, VMaterial& outMaterial) const
