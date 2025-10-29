@@ -319,7 +319,7 @@ namespace vasset
         return *this;
     }
 
-    bool VTextureImporter::importTexture(const std::string& filePath, VTexture& outTexture) const
+    bool VTextureImporter::importTexture(const std::string& filePath, VTexture& outTexture, bool forceReimport) const
     {
         // Check path
         std::filesystem::path osPath(filePath);
@@ -330,7 +330,7 @@ namespace vasset
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
         auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
-        if (entry.type != VAssetType::eUnknown)
+        if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing texture
             std::cout << "Texture already imported: " << entry.path << std::endl;
@@ -602,7 +602,7 @@ namespace vasset
         return *this;
     }
 
-    bool VMeshImporter::importMesh(const std::string& filePath, VMesh& outMesh)
+    bool VMeshImporter::importMesh(const std::string& filePath, VMesh& outMesh, bool forceReimport)
     {
         // Check path
         std::filesystem::path osPath(filePath);
@@ -613,7 +613,7 @@ namespace vasset
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
         auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
-        if (entry.type != VAssetType::eUnknown)
+        if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing mesh
             std::cout << "Mesh already imported: " << entry.path << std::endl;
@@ -1103,5 +1103,46 @@ namespace vasset
         }
 
         return true;
+    }
+
+    bool VAssetImporter::importOrReimportAsset(const std::string& filePath, bool reimport)
+    {
+        std::filesystem::path osPath(filePath);
+        if (!std::filesystem::exists(osPath))
+            return false;
+
+        std::string ext = osPath.extension().string();
+
+        if (isValidTexture(ext))
+        {
+            VTexture texture;
+            if (m_TextureImporter.importTexture(filePath, texture, reimport))
+            {
+                std::cout << "Imported/Reimported texture: " << filePath << std::endl;
+                return true;
+            }
+            else
+            {
+                std::cerr << "Failed to import/reimport texture: " << filePath << std::endl;
+                return false;
+            }
+        }
+        else if (isValidModel(ext))
+        {
+            VMesh mesh;
+            if (m_MeshImporter.importMesh(filePath, mesh, reimport))
+            {
+                std::cout << "Imported/Reimported mesh: " << filePath << std::endl;
+                return true;
+            }
+            else
+            {
+                std::cerr << "Failed to import/reimport mesh: " << filePath << std::endl;
+                return false;
+            }
+        }
+
+        std::cerr << "Unsupported asset type for import/reimport: " << filePath << std::endl;
+        return false;
     }
 } // namespace vasset
