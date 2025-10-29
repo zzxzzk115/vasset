@@ -31,7 +31,7 @@ namespace vasset
 
         VTextureImporter& setOptions(const ImportOptions& options);
 
-        bool importTexture(const std::string& filePath, VTexture& outTexture) const;
+        bool importTexture(const std::string& filePath, VTexture& outTexture, bool forceReimport = false) const;
 
     private:
         VAssetRegistry& m_Registry;
@@ -50,7 +50,7 @@ namespace vasset
 
         VMeshImporter& setOptions(const ImportOptions& options);
 
-        bool importMesh(const std::string& filePath, VMesh& outMesh);
+        bool importMesh(const std::string& filePath, VMesh& outMesh, bool forceReimport = false);
 
     private:
         void        processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
@@ -73,6 +73,7 @@ namespace vasset
         VAssetImporter(VAssetRegistry& registry);
 
         bool importAssetFolder(const std::string& folderPath);
+        bool importOrReimportAsset(const std::string& filePath, bool reimport = false);
 
         VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
         VTextureImporter& getTextureImporter() { return m_TextureImporter; }
