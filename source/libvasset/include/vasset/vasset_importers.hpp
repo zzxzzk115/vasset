@@ -72,7 +72,7 @@ namespace vasset
     public:
         VAssetImporter(VAssetRegistry& registry);
 
-        bool importAssetFolder(const std::string& folderPath);
+        bool importOrReimportAssetFolder(const std::string& folderPath, bool reimport = false);
         bool importOrReimportAsset(const std::string& filePath, bool reimport = false);
 
         VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
