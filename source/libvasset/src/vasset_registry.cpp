@@ -42,6 +42,30 @@ namespace vasset
         return true;
     }
 
+    bool VAssetRegistry::updateRegistry(const VUUID& uuid, const std::string& newPath)
+    {
+        auto it = m_Registry.find(uuid.toString());
+        if (it == m_Registry.end())
+        {
+            return false;
+        }
+
+        it->second.path = newPath;
+        return true;
+    }
+
+    bool VAssetRegistry::unregisterAsset(const VUUID& uuid)
+    {
+        auto it = m_Registry.find(uuid.toString());
+        if (it == m_Registry.end())
+        {
+            return false;
+        }
+
+        m_Registry.erase(it);
+        return true;
+    }
+
     VAssetRegistry::AssetEntry VAssetRegistry::lookup(const VUUID& uuid) const
     {
         auto it = m_Registry.find(uuid.toString());
