@@ -7,7 +7,9 @@
 
 namespace vasset
 {
-    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::string& metaFilePath)
+    constexpr const char* META_FILE_EXTENSION = ".vmeta";
+
+    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::filesystem::path& srcFilePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
@@ -64,13 +66,17 @@ namespace vasset
         file.close();
 
         // Save meta file as json by nlohmann_json
+        auto metaFilePath = srcFilePath;
+        metaFilePath.replace_extension(META_FILE_EXTENSION);
         VTextureMeta meta {};
-        meta.uuid = texture.uuid;
+        meta.uuid      = texture.uuid;
+        meta.extension = srcFilePath.extension().string();
         std::ofstream metaFile(metaFilePath);
         if (!metaFile)
             return false;
         metaFile << nlohmann::json {
             {"uuid", meta.uuid.toString()},
+            {"extension", meta.extension},
         };
         metaFile.close();
 

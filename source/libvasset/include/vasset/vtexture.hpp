@@ -3,6 +3,7 @@
 #include "vasset/vuuid.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -131,9 +132,10 @@ namespace vasset
 
     struct VTextureMeta
     {
-        VUUID uuid;
+        VUUID       uuid;
+        std::string extension; // original file extension
     };
 
-    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::string& metaFilePath);
+    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::filesystem::path& srcFilePath);
     bool loadTexture(const std::string& filePath, VTexture& outTexture);
 } // namespace vasset
