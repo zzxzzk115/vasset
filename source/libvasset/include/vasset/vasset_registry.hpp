@@ -25,6 +25,8 @@ namespace vasset
         void setImportedFolder(const std::string& folder);
 
         bool registerAsset(const VUUID& uuid, const std::string& path, VAssetType type);
+        bool updateRegistry(const VUUID& uuid, const std::string& newPath);
+        bool unregisterAsset(const VUUID& uuid);
 
         AssetEntry lookup(const VUUID& uuid) const;
 
