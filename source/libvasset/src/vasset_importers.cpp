@@ -20,6 +20,7 @@
 #include <meshoptimizer.h>
 
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
@@ -636,6 +637,9 @@ namespace vasset
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
             return false;
 
+        outMesh.name           = scene->mRootNode->mName.C_Str();
+        outMesh.sourceFileName = osPath.stem().string();
+
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
 
@@ -658,8 +662,6 @@ namespace vasset
         if (outMesh.tangents.size() == outMesh.vertexCount)
             outMesh.vertexFlags |= VVertexFlags::eTangent;
         // Note: Joint indices and weights would require additional processing, e.g., from bones
-
-        outMesh.name = scene->mRootNode->mName.C_Str();
 
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
@@ -783,9 +785,21 @@ namespace vasset
         // Process material
         if (mesh->mMaterialIndex < scene->mNumMaterials)
         {
-            aiMaterial*       aiMat = scene->mMaterials[mesh->mMaterialIndex];
+            // Get material name
+            aiMaterial* aiMat        = scene->mMaterials[mesh->mMaterialIndex];
+            std::string materialName = aiMat->GetName().C_Str();
+            if (materialName.empty())
+            {
+                materialName = std::format("{}_{}", outMesh.sourceFileName, mesh->mMaterialIndex);
+            }
+            else
+            {
+                materialName = std::format("{}_{}", outMesh.sourceFileName, materialName);
+            }
+
             const std::string relativeImportedPath =
-                m_Registry.getImportedAssetPath(VAssetType::eMaterial, aiMat->GetName().C_Str(), true);
+                m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, true);
+
             auto uuid  = VUUID::fromFilePath(relativeImportedPath);
             auto entry = m_Registry.lookup(uuid);
             if (entry.type != VAssetType::eUnknown)
@@ -803,7 +817,7 @@ namespace vasset
                 processMaterial(aiMat, vMat);
 
                 const std::string importedPath =
-                    m_Registry.getImportedAssetPath(VAssetType::eMaterial, aiMat->GetName().C_Str(), false);
+                    m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, false);
                 if (!saveMaterial(vMat, importedPath))
                 {
                     std::cerr << "Warning: Failed to save material: " << importedPath << std::endl;
