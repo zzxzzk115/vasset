@@ -12,12 +12,10 @@
     <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-macOS">
         <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_macos.yaml?branch=master&label=Build-macOS&logo=github" /></a>
     <a href="https://github.com/zzxzzk115/vasset/issues" alt="GitHub Issues">
-        <img src="https://img.shields.io/github/issues/zzxzzk115/vasset">
-    </a>
+        <img src="https://img.shields.io/github/issues/zzxzzk115/vasset"></a>
     <a href="https://www.codefactor.io/repository/github/zzxzzk115/vasset"><img src="https://www.codefactor.io/repository/github/zzxzzk115/vasset/badge" alt="CodeFactor" /></a>
     <a href="https://github.com/zzxzzk115/vasset/blob/master/LICENSE" alt="GitHub">
-        <img src="https://img.shields.io/github/license/zzxzzk115/vasset">
-    </a>
+        <img src="https://img.shields.io/github/license/zzxzzk115/vasset"></a>
 </p>
 
 ## Features
