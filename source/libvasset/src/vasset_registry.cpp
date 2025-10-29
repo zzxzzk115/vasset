@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <fstream>
+#include <iostream>
 
 namespace
 {
@@ -102,6 +103,25 @@ namespace vasset
             VAssetRegistry::AssetEntry entry;
             from_json(jEntry, entry);
             m_Registry[uuidStr] = entry;
+        }
+    }
+
+    void VAssetRegistry::cleanup()
+    {
+        // Traverse the registry and remove entries whose files do not exist
+        for (auto it = m_Registry.begin(); it != m_Registry.end();)
+        {
+            std::string fullPath = m_ImportedFolder + "/" + it->second.path;
+            if (!std::filesystem::exists(fullPath))
+            {
+                std::cerr << "Removing missing asset from registry: " << fullPath << std::endl;
+                it = m_Registry.erase(it);
+                std::filesystem::remove(fullPath);
+            }
+            else
+            {
+                ++it;
+            }
         }
     }
 

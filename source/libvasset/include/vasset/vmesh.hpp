@@ -80,6 +80,8 @@ namespace vasset
         std::vector<VMaterialRef> materials;
 
         std::string name;
+
+        std::string sourceFileName; // Not serialized
     };
 
     struct VMeshMeta
