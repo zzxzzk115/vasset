@@ -22,7 +22,7 @@ int main()
     }
 
     VAssetImporter assetImporter {registry};
-    assetImporter.importAssetFolder("resources");
+    assetImporter.importOrReimportAssetFolder("resources");
 
     registry.save("imported/asset_registry.json");
 

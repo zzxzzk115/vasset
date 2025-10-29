@@ -45,7 +45,7 @@ int main(int argc, char** argv)
     }
 
     VAssetImporter assetImporter {registry};
-    if (!assetImporter.importAssetFolder(assetFolder))
+    if (!assetImporter.importOrReimportAssetFolder(assetFolder))
     {
         std::cerr << "Failed to import assets from folder: " << assetFolder << std::endl;
         return 1;

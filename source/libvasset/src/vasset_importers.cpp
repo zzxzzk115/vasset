@@ -1051,7 +1051,7 @@ namespace vasset
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry)
     {}
 
-    bool VAssetImporter::importAssetFolder(const std::string& folderPath)
+    bool VAssetImporter::importOrReimportAssetFolder(const std::string& folderPath, bool reimport)
     {
         // Check path
         std::filesystem::path osPath(folderPath);
@@ -1069,7 +1069,7 @@ namespace vasset
                 if (isValidTexture(ext))
                 {
                     VTexture texture;
-                    if (m_TextureImporter.importTexture(filePath, texture))
+                    if (m_TextureImporter.importTexture(filePath, texture, reimport))
                     {
                         std::cout << "Imported texture: " << filePath << std::endl;
                     }
@@ -1081,7 +1081,7 @@ namespace vasset
                 else if (isValidModel(ext))
                 {
                     VMesh mesh;
-                    if (m_MeshImporter.importMesh(filePath, mesh))
+                    if (m_MeshImporter.importMesh(filePath, mesh, reimport))
                     {
                         std::cout << "Imported mesh: " << filePath << std::endl;
                     }
@@ -1098,7 +1098,10 @@ namespace vasset
             else if (entry.is_directory())
             {
                 // Recursively import from subdirectories
-                importAssetFolder(entry.path().string());
+                if (!importOrReimportAssetFolder(entry.path().string(), reimport))
+                {
+                    std::cerr << "Failed to import assets from folder: " << entry.path().string() << std::endl;
+                }
             }
         }
 
@@ -1110,6 +1113,12 @@ namespace vasset
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
             return false;
+
+        if (std::filesystem::is_directory(osPath))
+        {
+            std::cerr << "Provided path is a directory, expected a file: " << filePath << std::endl;
+            return false;
+        }
 
         std::string ext = osPath.extension().string();
 
