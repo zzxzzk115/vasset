@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -83,9 +84,10 @@ namespace vasset
 
     struct VMeshMeta
     {
-        VUUID uuid;
+        VUUID       uuid;
+        std::string extension; // original file extension
     };
 
-    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::string& metaFilePath);
+    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::filesystem::path& srcFilePath);
     bool loadMesh(const std::string& filePath, VMesh& outMesh);
 } // namespace vasset

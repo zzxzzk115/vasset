@@ -584,8 +584,7 @@ namespace vasset
 
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
-        const std::string metaFilePath = osPath.replace_extension(".vmeta").string();
-        if (!saveTexture(outTexture, importedPath, metaFilePath))
+        if (!saveTexture(outTexture, importedPath, osPath))
         {
             std::cerr << "Warning: Failed to save texture: " << importedPath << std::endl;
             return false;
@@ -664,8 +663,7 @@ namespace vasset
 
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
-        const std::string metaFilePath = osPath.replace_extension(".vmeta").string();
-        if (!saveMesh(outMesh, importedPath, metaFilePath))
+        if (!saveMesh(outMesh, importedPath, osPath))
         {
             std::cerr << "Warning: Failed to save mesh: " << importedPath << std::endl;
             return false;
