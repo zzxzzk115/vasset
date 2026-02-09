@@ -484,6 +484,13 @@ namespace vasset
                 return false;
             }
 
+            auto srcSize             = hdr ? width * height * channels * sizeof(float) : width * height * channels;
+            auto targetTextureFormat = VTextureFormat::eRGB8;
+            if (channels == 4)
+            {
+                targetTextureFormat = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
+            }
+
             auto targetFormat = m_Options.targetTextureFileFormat;
 
             if (targetFormat == VTextureFileFormat::eKTX || targetFormat == VTextureFileFormat::eDDS)
@@ -506,11 +513,10 @@ namespace vasset
                 outTexture.isCubemap       = false;
                 outTexture.generateMipmaps = m_Options.generateMipmaps;
                 outTexture.type            = VTextureDimension::e2D;
-                outTexture.format          = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
+                outTexture.format          = targetTextureFormat;
                 outTexture.fileFormat      = m_Options.targetTextureFileFormat;
                 outTexture.data.assign(reinterpret_cast<uint8_t*>(pixels),
-                                       reinterpret_cast<uint8_t*>(pixels) +
-                                           (hdr ? width * height * 4 * sizeof(float) : width * height * 4));
+                                       reinterpret_cast<uint8_t*>(pixels) + srcSize);
                 stbi_image_free(pixels);
                 return true;
             }
@@ -527,7 +533,7 @@ namespace vasset
             ci.numDimensions   = 2;
             ci.isArray         = KTX_FALSE;
             ci.generateMipmaps = m_Options.generateMipmaps;
-            ci.vkFormat        = static_cast<uint32_t>(hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8);
+            ci.vkFormat        = static_cast<uint32_t>(targetTextureFormat);
 
             if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &kTexture) != KTX_SUCCESS)
             {
@@ -535,12 +541,8 @@ namespace vasset
                 return false;
             }
 
-            if (ktxTexture_SetImageFromMemory(ktxTexture(kTexture),
-                                              0,
-                                              0,
-                                              0,
-                                              reinterpret_cast<const ktx_uint8_t*>(pixels),
-                                              hdr ? width * height * 4 * sizeof(float) : width * height * 4) !=
+            if (ktxTexture_SetImageFromMemory(
+                    ktxTexture(kTexture), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixels), srcSize) !=
                 KTX_SUCCESS)
             {
                 stbi_image_free(pixels);
@@ -556,7 +558,11 @@ namespace vasset
             params.qualityLevel     = m_Options.qualityLevel;
             params.compressionLevel = m_Options.compressionLevel;
             params.threadCount      = m_Options.basisUThreadCount;
-            ktxTexture2_CompressBasisEx(kTexture, &params);
+            if (ktxTexture2_CompressBasisEx(kTexture, &params) != KTX_SUCCESS)
+            {
+                ktxTexture_Destroy(ktxTexture(kTexture));
+                return false;
+            }
 
             // Write to memory
             ktx_uint8_t* bytes = nullptr;
@@ -969,6 +975,7 @@ namespace vasset
 
                 if (!m_TextureImporter.importTexture(texPath.generic_string(), texture))
                 {
+                    std::cerr << "Failed to import texture: " << texPath << std::endl;
                     return {};
                 }
 
