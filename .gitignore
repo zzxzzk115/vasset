@@ -28,3 +28,4 @@ vsxmake*/
 
 # imported
 imported/
+*.vmeta
