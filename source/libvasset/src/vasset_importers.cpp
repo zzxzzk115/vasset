@@ -322,14 +322,52 @@ namespace vasset
 
     bool VTextureImporter::importTexture(const std::string& filePath, VTexture& outTexture, bool forceReimport) const
     {
+        // ------------------------------------------------------------
+        // RAII guards
+        // ------------------------------------------------------------
+        struct PixelGuard
+        {
+            void* p = nullptr;
+            ~PixelGuard()
+            {
+                if (p)
+                    stbi_image_free(p);
+            }
+        } pixelGuard;
+
+        struct KtxGuard
+        {
+            ktxTexture2* p = nullptr;
+            ~KtxGuard()
+            {
+                if (p)
+                    ktxTexture_Destroy(ktxTexture(p));
+            }
+        } ktxGuard;
+
+        struct MemoryGuard
+        {
+            ktx_uint8_t* p = nullptr;
+            ~MemoryGuard()
+            {
+                if (p)
+                    free(p);
+            }
+        } memGuard;
+
+        // ------------------------------------------------------------
         // Check path
+        // ------------------------------------------------------------
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
             return false;
 
+        // ------------------------------------------------------------
         // Check registry
+        // ------------------------------------------------------------
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
+
         auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
@@ -341,8 +379,15 @@ namespace vasset
         // Set UUID
         outTexture.uuid = VUUID::fromFilePath(relativeImportedPath);
 
-        // Check extension
+        // Default target format
+        auto targetFormat = m_Options.targetTextureFileFormat;
+
+        // ------------------------------------------------------------
+        // Extension dispatch
+        // ------------------------------------------------------------
         std::string ext = osPath.extension().string();
+
+        // ======================== KTX / DDS ========================
         if (isKTXDDS(ext))
         {
             auto pathStr = osPath.string();
@@ -355,7 +400,6 @@ namespace vasset
 
             auto path = std::filesystem::path {pathStr};
 
-            // C++ file I/O
             auto fileBytes = readAll(path);
             if (fileBytes.empty())
                 return false;
@@ -378,63 +422,61 @@ namespace vasset
             outTexture.type            = VTextureDimension::e2D;
             outTexture.format          = toVTextureFormat(tc.format);
             outTexture.fileFormat      = (ext == ".ktx") ? VTextureFileFormat::eKTX : VTextureFileFormat::eDDS;
+
             outTexture.data.assign(fileBytes.begin(), fileBytes.end());
+
+            goto SUCCESS;
         }
-        else if (isKTX2(ext))
+
+        // ======================== KTX2 ========================
+        if (isKTX2(ext))
         {
-            // Read KTX2 file
             std::ifstream file(filePath, std::ios::binary | std::ios::ate);
             if (!file)
                 return false;
 
             std::streamsize size = file.tellg();
             file.seekg(0, std::ios::beg);
+
             std::vector<char> bytes(size);
             if (!file.read(bytes.data(), size))
                 return false;
 
-            // Validate KTX2
-            ktxTexture2* kTexture = nullptr;
             if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(bytes.data()),
                                              size,
                                              KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
-                                             &kTexture) != KTX_SUCCESS)
+                                             &ktxGuard.p) != KTX_SUCCESS)
             {
                 return false;
             }
 
-            int          width      = kTexture->baseWidth;
-            int          height     = kTexture->baseHeight;
-            int          depth      = kTexture->baseDepth;
-            int          levels     = kTexture->numLevels;
-            int          layers     = kTexture->numLayers;
-            bool         isCubemap  = kTexture->numFaces == 6;
-            bool         genMips    = kTexture->generateMipmaps;
-            int          dimensions = kTexture->numDimensions;
-            ktx_uint32_t format     = kTexture->vkFormat;
+            auto* kTexture = ktxGuard.p;
 
             // Fill outTexture
-            outTexture.width           = width;
-            outTexture.height          = height;
-            outTexture.depth           = depth;
-            outTexture.mipLevels       = levels;
-            outTexture.arrayLayers     = layers;
-            outTexture.isCubemap       = isCubemap;
-            outTexture.generateMipmaps = genMips;
-            outTexture.type            = static_cast<VTextureDimension>(dimensions);
-            outTexture.format          = static_cast<VTextureFormat>(format);
-            outTexture.data.assign(bytes.begin(), bytes.end());
-        }
-        else
-        {
-            // Load as raw image
-            int   width, height, channels;
-            void* pixels = nullptr;
-            bool  hdr    = false;
+            outTexture.width           = kTexture->baseWidth;
+            outTexture.height          = kTexture->baseHeight;
+            outTexture.depth           = kTexture->baseDepth;
+            outTexture.mipLevels       = kTexture->numLevels;
+            outTexture.arrayLayers     = kTexture->numLayers;
+            outTexture.isCubemap       = kTexture->numFaces == 6;
+            outTexture.generateMipmaps = kTexture->generateMipmaps;
+            outTexture.type            = static_cast<VTextureDimension>(kTexture->numDimensions);
 
+            outTexture.format = static_cast<VTextureFormat>(kTexture->vkFormat);
+
+            outTexture.data.assign(bytes.begin(), bytes.end());
+
+            goto SUCCESS;
+        }
+
+        // ======================== RAW IMAGE ========================
+        {
+            int  width = 0, height = 0, channels = 0;
+            bool hdr = false;
+
+            // ---------- EXR ----------
             if (isEXR(ext))
             {
-                // Supported by tinyexr
                 const char* err = nullptr;
                 float*      img = nullptr;
 
@@ -448,34 +490,37 @@ namespace vasset
                     return false;
                 }
 
-                channels = 4; // RGBA
-                pixels   = img;
-                hdr      = true;
+                pixelGuard.p = img;
+
+                targetFormat = VTextureFileFormat::eEXR;
+                channels     = 4; // RGBA
+                hdr          = true;
             }
+
+            // ---------- STB ----------
             else if (isSTB(ext))
             {
-                // Load image file
                 auto* file = fopen(filePath.c_str(), "rb");
                 if (!file)
-                {
                     return false;
-                }
 
-                // Supported by stb_image
                 hdr = stbi_is_hdr_from_file(file);
 
                 stbi_set_flip_vertically_on_load(m_Options.flipY ? 1 : 0);
 
                 if (hdr)
                 {
-                    pixels = stbi_loadf_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                    pixelGuard.p = stbi_loadf_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                    targetFormat = VTextureFileFormat::eHDR;
                 }
                 else
                 {
-                    pixels = stbi_load_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
+                    pixelGuard.p = stbi_load_from_file(file, &width, &height, &channels, STBI_rgb_alpha);
                 }
+
                 fclose(file);
-                if (!pixels)
+
+                if (!pixelGuard.p)
                     return false;
             }
             else
@@ -484,27 +529,27 @@ namespace vasset
                 return false;
             }
 
-            auto srcSize             = hdr ? width * height * channels * sizeof(float) : width * height * channels;
-            auto targetTextureFormat = VTextureFormat::eRGB8;
-            if (channels == 4)
-            {
-                targetTextureFormat = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
-            }
+            // Treat everything as RGBA
+            channels = 4;
 
-            auto targetFormat = m_Options.targetTextureFileFormat;
+            auto srcSize = hdr ? width * height * channels * sizeof(float) : width * height * channels;
+
+            auto targetTextureFormat = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
 
             if (targetFormat == VTextureFileFormat::eKTX || targetFormat == VTextureFileFormat::eDDS)
             {
-                std::cerr << "Warning: Target texture file format KTX or DDS is not supported for image files. "
-                             "Defaulting to KTX2."
+                std::cerr << "Warning: Target texture file format KTX or DDS "
+                             "is not supported for image files. Defaulting to KTX2."
                           << std::endl;
+
                 targetFormat = VTextureFileFormat::eKTX2;
             }
 
-            // Load other image formats
+            // ---------- Not KTX2: direct store ----------
             if (targetFormat != VTextureFileFormat::eKTX2)
             {
-                // Fill outTexture
+                auto fileBytes = readAll(osPath);
+
                 outTexture.width           = width;
                 outTexture.height          = height;
                 outTexture.depth           = 1;
@@ -514,15 +559,14 @@ namespace vasset
                 outTexture.generateMipmaps = m_Options.generateMipmaps;
                 outTexture.type            = VTextureDimension::e2D;
                 outTexture.format          = targetTextureFormat;
-                outTexture.fileFormat      = m_Options.targetTextureFileFormat;
-                outTexture.data.assign(reinterpret_cast<uint8_t*>(pixels),
-                                       reinterpret_cast<uint8_t*>(pixels) + srcSize);
-                stbi_image_free(pixels);
-                return true;
+                outTexture.fileFormat      = targetFormat;
+
+                outTexture.data.assign(fileBytes.begin(), fileBytes.end());
+
+                goto SUCCESS;
             }
 
-            // Convert to ktx2
-            ktxTexture2*         kTexture = nullptr;
+            // ---------- Convert to KTX2 ----------
             ktxTextureCreateInfo ci {};
             ci.baseWidth       = width;
             ci.baseHeight      = height;
@@ -535,46 +579,40 @@ namespace vasset
             ci.generateMipmaps = m_Options.generateMipmaps;
             ci.vkFormat        = static_cast<uint32_t>(targetTextureFormat);
 
-            if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &kTexture) != KTX_SUCCESS)
+            if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktxGuard.p) != KTX_SUCCESS)
             {
-                stbi_image_free(pixels);
                 return false;
             }
 
             if (ktxTexture_SetImageFromMemory(
-                    ktxTexture(kTexture), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixels), srcSize) !=
+                    ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixelGuard.p), srcSize) !=
                 KTX_SUCCESS)
             {
-                stbi_image_free(pixels);
-                ktxTexture_Destroy(ktxTexture(kTexture));
                 return false;
             }
-            stbi_image_free(pixels);
 
-            // BasisU Compression
+            // ---------- BasisU Compression ----------
             ktxBasisParams params {};
-            params.structSize       = sizeof(ktxBasisParams); // Required for version detection
+            params.structSize       = sizeof(ktxBasisParams);
             params.uastc            = m_Options.uastc;
             params.noSSE            = m_Options.noSSE;
             params.qualityLevel     = m_Options.qualityLevel;
             params.compressionLevel = m_Options.compressionLevel;
             params.threadCount      = m_Options.basisUThreadCount;
-            if (ktxTexture2_CompressBasisEx(kTexture, &params) != KTX_SUCCESS)
+
+            if (ktxTexture2_CompressBasisEx(ktxGuard.p, &params) != KTX_SUCCESS)
             {
-                ktxTexture_Destroy(ktxTexture(kTexture));
+                std::cout << "Warning: Failed to compress texture with BasisU." << std::endl;
+            }
+
+            // ---------- Write to memory ----------
+            ktx_size_t size = 0;
+            if (ktxTexture_WriteToMemory(ktxTexture(ktxGuard.p), &memGuard.p, &size) != KTX_SUCCESS)
+            {
                 return false;
             }
 
-            // Write to memory
-            ktx_uint8_t* bytes = nullptr;
-            ktx_size_t   size  = 0;
-            if (ktxTexture_WriteToMemory(ktxTexture(kTexture), &bytes, &size) != KTX_SUCCESS)
-            {
-                ktxTexture_Destroy(ktxTexture(kTexture));
-                return false;
-            }
-
-            // Fill outTexture
+            // ---------- Fill outTexture ----------
             outTexture.width           = width;
             outTexture.height          = height;
             outTexture.depth           = ci.baseDepth;
@@ -583,20 +621,23 @@ namespace vasset
             outTexture.isCubemap       = ci.numFaces == 6;
             outTexture.generateMipmaps = ci.generateMipmaps;
             outTexture.type            = static_cast<VTextureDimension>(ci.numDimensions);
-            outTexture.format          = targetTextureFormat;
-            outTexture.fileFormat      = VTextureFileFormat::eKTX2;
-            outTexture.data.assign(bytes, bytes + size);
 
-            ktxTexture_Destroy(ktxTexture(kTexture));
+            outTexture.format     = targetTextureFormat;
+            outTexture.fileFormat = VTextureFileFormat::eKTX2;
+
+            outTexture.data.assign(memGuard.p, memGuard.p + size);
         }
 
+    SUCCESS:
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
+
         if (!saveTexture(outTexture, importedPath, osPath))
         {
             std::cerr << "Warning: Failed to save texture: " << importedPath << std::endl;
             return false;
         }
+
         m_Registry.registerAsset(outTexture.uuid, relativeImportedPath, VAssetType::eTexture);
 
         return true;
