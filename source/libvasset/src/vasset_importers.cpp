@@ -553,6 +553,7 @@ namespace vasset
 
             // BasisU Compression
             ktxBasisParams params {};
+            params.structSize       = sizeof(ktxBasisParams); // Required for version detection
             params.uastc            = m_Options.uastc;
             params.noSSE            = m_Options.noSSE;
             params.qualityLevel     = m_Options.qualityLevel;
@@ -582,7 +583,7 @@ namespace vasset
             outTexture.isCubemap       = ci.numFaces == 6;
             outTexture.generateMipmaps = ci.generateMipmaps;
             outTexture.type            = static_cast<VTextureDimension>(ci.numDimensions);
-            outTexture.format          = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
+            outTexture.format          = targetTextureFormat;
             outTexture.fileFormat      = VTextureFileFormat::eKTX2;
             outTexture.data.assign(bytes, bytes + size);
 
