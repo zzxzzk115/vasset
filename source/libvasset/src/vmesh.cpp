@@ -331,99 +331,86 @@ namespace vasset
 
         // 4 bytes for number of indices
         uint32_t indexCount = 0;
-        file.read(reinterpret_cast<char*>(&indexCount), sizeof(indexCount));
+        readRaw(&indexCount, sizeof(indexCount));
+
         outMesh.indices.resize(indexCount);
 
         // N indices
-        file.read(reinterpret_cast<char*>(outMesh.indices.data()), indexCount * sizeof(uint32_t));
+        readRaw(outMesh.indices.data(), indexCount * sizeof(uint32_t));
 
         // 4 bytes for number of sub-meshes
         uint32_t subMeshCount = 0;
-        file.read(reinterpret_cast<char*>(&subMeshCount), sizeof(subMeshCount));
+        readRaw(&subMeshCount, sizeof(subMeshCount));
+
         outMesh.subMeshes.resize(subMeshCount);
 
         // N sub-meshes
         for (auto& subMesh : outMesh.subMeshes)
         {
-            // 4 bytes for vertex offset
-            file.read(reinterpret_cast<char*>(&subMesh.vertexOffset), sizeof(subMesh.vertexOffset));
+            readRaw(&subMesh.vertexOffset, sizeof(subMesh.vertexOffset));
+            readRaw(&subMesh.vertexCount, sizeof(subMesh.vertexCount));
+            readRaw(&subMesh.indexOffset, sizeof(subMesh.indexOffset));
+            readRaw(&subMesh.indexCount, sizeof(subMesh.indexCount));
+            readRaw(&subMesh.materialIndex, sizeof(subMesh.materialIndex));
 
-            // 4 bytes for vertex count
-            file.read(reinterpret_cast<char*>(&subMesh.vertexCount), sizeof(subMesh.vertexCount));
-
-            // 4 bytes for index offset
-            file.read(reinterpret_cast<char*>(&subMesh.indexOffset), sizeof(subMesh.indexOffset));
-
-            // 4 bytes for index count
-            file.read(reinterpret_cast<char*>(&subMesh.indexCount), sizeof(subMesh.indexCount));
-
-            // 4 bytes for material index
-            file.read(reinterpret_cast<char*>(&subMesh.materialIndex), sizeof(subMesh.materialIndex));
-
-            // 4 bytes for length of meshlets
+            // meshlets
             uint32_t meshletCount = 0;
-            file.read(reinterpret_cast<char*>(&meshletCount), sizeof(meshletCount));
+            readRaw(&meshletCount, sizeof(meshletCount));
             subMesh.meshletGroup.meshlets.resize(meshletCount);
 
-            // N meshlets
             for (auto& meshlet : subMesh.meshletGroup.meshlets)
             {
-                file.read(reinterpret_cast<char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
-                file.read(reinterpret_cast<char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
-                file.read(reinterpret_cast<char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
-                file.read(reinterpret_cast<char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
-                file.read(reinterpret_cast<char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
-                file.read(reinterpret_cast<char*>(&meshlet.center), sizeof(meshlet.center));
-                file.read(reinterpret_cast<char*>(&meshlet.radius), sizeof(meshlet.radius));
+                readRaw(&meshlet.vertexOffset, sizeof(meshlet.vertexOffset));
+                readRaw(&meshlet.vertexCount, sizeof(meshlet.vertexCount));
+                readRaw(&meshlet.triangleOffset, sizeof(meshlet.triangleOffset));
+                readRaw(&meshlet.triangleCount, sizeof(meshlet.triangleCount));
+                readRaw(&meshlet.materialIndex, sizeof(meshlet.materialIndex));
+                readRaw(&meshlet.center, sizeof(meshlet.center));
+                readRaw(&meshlet.radius, sizeof(meshlet.radius));
             }
 
-            // 4 bytes for length of meshlet vertices
             uint32_t meshletVertexCount = 0;
-            file.read(reinterpret_cast<char*>(&meshletVertexCount), sizeof(meshletVertexCount));
+            readRaw(&meshletVertexCount, sizeof(meshletVertexCount));
             subMesh.meshletGroup.meshletVertices.resize(meshletVertexCount);
 
-            // N meshlet vertices
             for (auto& vertex : subMesh.meshletGroup.meshletVertices)
             {
-                file.read(reinterpret_cast<char*>(&vertex), sizeof(vertex));
+                readRaw(&vertex, sizeof(vertex));
             }
 
-            // 4 bytes for length of meshlet triangles
             uint32_t meshletTriangleCount = 0;
-            file.read(reinterpret_cast<char*>(&meshletTriangleCount), sizeof(meshletTriangleCount));
+            readRaw(&meshletTriangleCount, sizeof(meshletTriangleCount));
             subMesh.meshletGroup.meshletTriangles.resize(meshletTriangleCount);
 
-            // N meshlet triangles
             for (auto& triangle : subMesh.meshletGroup.meshletTriangles)
             {
-                file.read(reinterpret_cast<char*>(&triangle), sizeof(triangle));
+                readRaw(&triangle, sizeof(triangle));
             }
 
-            // 4 bytes for name length
             uint32_t nameLength = 0;
-            file.read(reinterpret_cast<char*>(&nameLength), sizeof(nameLength));
+            readRaw(&nameLength, sizeof(nameLength));
 
             subMesh.name.resize(nameLength);
-            file.read(reinterpret_cast<char*>(subMesh.name.data()), nameLength);
+            readRaw(subMesh.name.data(), nameLength);
         }
 
-        // 4 bytes for number of materials
+        // materials
         uint32_t materialCount = 0;
-        file.read(reinterpret_cast<char*>(&materialCount), sizeof(materialCount));
+        readRaw(&materialCount, sizeof(materialCount));
+
         outMesh.materials.resize(materialCount);
 
-        // N materials
         for (auto& material : outMesh.materials)
         {
-            // 16 bytes for material UUID
-            file.read(reinterpret_cast<char*>(&material.uuid), sizeof(material.uuid));
+            readRaw(&material.uuid, sizeof(material.uuid));
         }
 
-        // name
+        // mesh name
         uint32_t nameLength = 0;
-        file.read(reinterpret_cast<char*>(&nameLength), sizeof(nameLength));
+        readRaw(&nameLength, sizeof(nameLength));
+
         outMesh.name.resize(nameLength);
-        file.read(reinterpret_cast<char*>(outMesh.name.data()), nameLength);
+        readRaw(outMesh.name.data(), nameLength);
 
         file.close();
 
