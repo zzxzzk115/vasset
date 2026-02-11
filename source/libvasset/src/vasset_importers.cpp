@@ -345,16 +345,6 @@ namespace vasset
             }
         } ktxGuard;
 
-        struct MemoryGuard
-        {
-            ktx_uint8_t* p = nullptr;
-            ~MemoryGuard()
-            {
-                if (p)
-                    free(p);
-            }
-        } memGuard;
-
         // ------------------------------------------------------------
         // Check path
         // ------------------------------------------------------------
@@ -606,8 +596,9 @@ namespace vasset
             }
 
             // ---------- Write to memory ----------
-            ktx_size_t size = 0;
-            if (ktxTexture_WriteToMemory(ktxTexture(ktxGuard.p), &memGuard.p, &size) != KTX_SUCCESS)
+            ktx_size_t   size = 0;
+            ktx_uint8_t* mem  = nullptr;
+            if (ktxTexture_WriteToMemory(ktxTexture(ktxGuard.p), &mem, &size) != KTX_SUCCESS)
             {
                 return false;
             }
@@ -625,7 +616,7 @@ namespace vasset
             outTexture.format     = targetTextureFormat;
             outTexture.fileFormat = VTextureFileFormat::eKTX2;
 
-            outTexture.data.assign(memGuard.p, memGuard.p + size);
+            outTexture.data.assign(mem, mem + size);
         }
 
     SUCCESS:
