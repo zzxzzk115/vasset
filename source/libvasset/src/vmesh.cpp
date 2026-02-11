@@ -1,158 +1,227 @@
 #include "vasset/vmesh.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zstd.h>
 
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 namespace vasset
 {
     constexpr const char* META_FILE_EXTENSION = ".vmeta";
 
-    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::filesystem::path& srcFilePath)
+    struct VMeshFileHeader
     {
-        // Binary writing
+        char     magic[16]; // "VMESH"
+        uint32_t version;   // 1
+        uint32_t flags;     // bit0 = compressed
+        uint64_t rawSize;   // uncompressed size
+    };
+
+    bool saveMesh(const VMesh&                 mesh,
+                  const std::string&           filePath,
+                  const std::filesystem::path& srcFilePath,
+                  int                          zstdLevel) // 0 = no compression
+    {
+        // ------------------------------------------------------------
+        // Prepare output directory
+        // ------------------------------------------------------------
         std::filesystem::path path(filePath);
         if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
+        {
             std::filesystem::create_directories(path.parent_path());
-        std::ofstream file(filePath, std::ios::binary);
-        if (!file)
-            return false;
+        }
+
+        // ------------------------------------------------------------
+        // Serialize original VMESH format into memory first
+        // ------------------------------------------------------------
+        std::vector<uint8_t> raw;
+        raw.reserve(1024 * 64);
+
+        auto writeRaw = [&](const void* data, size_t size) {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+
+            raw.insert(raw.end(), p, p + size);
+        };
 
         // 16 bytes for magic number
         const char magic[16] = "VMESH\0";
-        file.write(magic, sizeof(magic));
+        writeRaw(magic, sizeof(magic));
 
         // 16 bytes for UUID
-        file.write(reinterpret_cast<const char*>(&mesh.uuid), sizeof(mesh.uuid));
+        writeRaw(&mesh.uuid, sizeof(mesh.uuid));
 
         // 4 bytes for vertex count
-        file.write(reinterpret_cast<const char*>(&mesh.vertexCount), sizeof(mesh.vertexCount));
+        writeRaw(&mesh.vertexCount, sizeof(mesh.vertexCount));
 
         // 4 bytes for vertex flags
-        file.write(reinterpret_cast<const char*>(&mesh.vertexFlags), sizeof(mesh.vertexFlags));
+        writeRaw(&mesh.vertexFlags, sizeof(mesh.vertexFlags));
 
         // N vertices
         for (uint32_t i = 0; i < mesh.vertexCount; ++i)
         {
             if (mesh.vertexFlags & VVertexFlags::ePosition)
-                file.write(reinterpret_cast<const char*>(&mesh.positions[i]), sizeof(VPosition));
+                writeRaw(&mesh.positions[i], sizeof(VPosition));
             if (mesh.vertexFlags & VVertexFlags::eNormal)
-                file.write(reinterpret_cast<const char*>(&mesh.normals[i]), sizeof(VNormal));
+                writeRaw(&mesh.normals[i], sizeof(VNormal));
             if (mesh.vertexFlags & VVertexFlags::eColor)
-                file.write(reinterpret_cast<const char*>(&mesh.colors[i]), sizeof(VColor));
+                writeRaw(&mesh.colors[i], sizeof(VColor));
             if (mesh.vertexFlags & VVertexFlags::eTexCoord0)
-                file.write(reinterpret_cast<const char*>(&mesh.texCoords0[i]), sizeof(VTexCoord));
+                writeRaw(&mesh.texCoords0[i], sizeof(VTexCoord));
             if (mesh.vertexFlags & VVertexFlags::eTexCoord1)
-                file.write(reinterpret_cast<const char*>(&mesh.texCoords1[i]), sizeof(VTexCoord));
+                writeRaw(&mesh.texCoords1[i], sizeof(VTexCoord));
             if (mesh.vertexFlags & VVertexFlags::eTangent)
-                file.write(reinterpret_cast<const char*>(&mesh.tangents[i]), sizeof(VTangent));
+                writeRaw(&mesh.tangents[i], sizeof(VTangent));
             if (mesh.vertexFlags & VVertexFlags::eJointIndices)
-                file.write(reinterpret_cast<const char*>(&mesh.jointIndices[i]), sizeof(VJointIndices));
+                writeRaw(&mesh.jointIndices[i], sizeof(VJointIndices));
             if (mesh.vertexFlags & VVertexFlags::eJointWeights)
-                file.write(reinterpret_cast<const char*>(&mesh.jointWeights[i]), sizeof(VJointWeights));
+                writeRaw(&mesh.jointWeights[i], sizeof(VJointWeights));
         }
 
         // 4 bytes for number of indices
         uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
-        file.write(reinterpret_cast<const char*>(&indexCount), sizeof(indexCount));
+        writeRaw(&indexCount, sizeof(indexCount));
 
         // N indices
-        file.write(reinterpret_cast<const char*>(mesh.indices.data()), indexCount * sizeof(uint32_t));
+        writeRaw(mesh.indices.data(), indexCount * sizeof(uint32_t));
 
         // 4 bytes for number of sub-meshes
         uint32_t subMeshCount = static_cast<uint32_t>(mesh.subMeshes.size());
-        file.write(reinterpret_cast<const char*>(&subMeshCount), sizeof(subMeshCount));
+        writeRaw(&subMeshCount, sizeof(subMeshCount));
 
         // N sub-meshes
         for (const auto& subMesh : mesh.subMeshes)
         {
             // 4 bytes for vertex offset
-            file.write(reinterpret_cast<const char*>(&subMesh.vertexOffset), sizeof(subMesh.vertexOffset));
+            writeRaw(&subMesh.vertexOffset, sizeof(subMesh.vertexOffset));
 
             // 4 bytes for vertex count
-            file.write(reinterpret_cast<const char*>(&subMesh.vertexCount), sizeof(subMesh.vertexCount));
+            writeRaw(&subMesh.vertexCount, sizeof(subMesh.vertexCount));
 
             // 4 bytes for index offset
-            file.write(reinterpret_cast<const char*>(&subMesh.indexOffset), sizeof(subMesh.indexOffset));
+            writeRaw(&subMesh.indexOffset, sizeof(subMesh.indexOffset));
 
             // 4 bytes for index count
-            file.write(reinterpret_cast<const char*>(&subMesh.indexCount), sizeof(subMesh.indexCount));
+            writeRaw(&subMesh.indexCount, sizeof(subMesh.indexCount));
 
             // 4 bytes for material index
-            file.write(reinterpret_cast<const char*>(&subMesh.materialIndex), sizeof(subMesh.materialIndex));
+            writeRaw(&subMesh.materialIndex, sizeof(subMesh.materialIndex));
 
             // 4 bytes for length of meshlets
             uint32_t meshletCount = static_cast<uint32_t>(subMesh.meshletGroup.meshlets.size());
-            file.write(reinterpret_cast<const char*>(&meshletCount), sizeof(uint32_t));
+            writeRaw(&meshletCount, sizeof(uint32_t));
 
             // N meshlets
             for (const auto& meshlet : subMesh.meshletGroup.meshlets)
             {
-                file.write(reinterpret_cast<const char*>(&meshlet.vertexOffset), sizeof(meshlet.vertexOffset));
-                file.write(reinterpret_cast<const char*>(&meshlet.vertexCount), sizeof(meshlet.vertexCount));
-                file.write(reinterpret_cast<const char*>(&meshlet.triangleOffset), sizeof(meshlet.triangleOffset));
-                file.write(reinterpret_cast<const char*>(&meshlet.triangleCount), sizeof(meshlet.triangleCount));
-                file.write(reinterpret_cast<const char*>(&meshlet.materialIndex), sizeof(meshlet.materialIndex));
-                file.write(reinterpret_cast<const char*>(&meshlet.center), sizeof(meshlet.center));
-                file.write(reinterpret_cast<const char*>(&meshlet.radius), sizeof(meshlet.radius));
+                writeRaw(&meshlet.vertexOffset, sizeof(meshlet.vertexOffset));
+                writeRaw(&meshlet.vertexCount, sizeof(meshlet.vertexCount));
+                writeRaw(&meshlet.triangleOffset, sizeof(meshlet.triangleOffset));
+                writeRaw(&meshlet.triangleCount, sizeof(meshlet.triangleCount));
+                writeRaw(&meshlet.materialIndex, sizeof(meshlet.materialIndex));
+                writeRaw(&meshlet.center, sizeof(meshlet.center));
+                writeRaw(&meshlet.radius, sizeof(meshlet.radius));
             }
 
             // 4 bytes for length of meshlet vertices
             uint32_t meshletVertexCount = static_cast<uint32_t>(subMesh.meshletGroup.meshletVertices.size());
-            file.write(reinterpret_cast<const char*>(&meshletVertexCount), sizeof(uint32_t));
+            writeRaw(&meshletVertexCount, sizeof(uint32_t));
 
             // N meshlet vertices
             for (const auto& vertex : subMesh.meshletGroup.meshletVertices)
             {
-                file.write(reinterpret_cast<const char*>(&vertex), sizeof(vertex));
+                writeRaw(&vertex, sizeof(vertex));
             }
 
             // 4 bytes for length of meshlet triangles
             uint32_t meshletTriangleCount = static_cast<uint32_t>(subMesh.meshletGroup.meshletTriangles.size());
-            file.write(reinterpret_cast<const char*>(&meshletTriangleCount), sizeof(uint32_t));
+            writeRaw(&meshletTriangleCount, sizeof(uint32_t));
 
             // N meshlet triangles
             for (const auto& triangle : subMesh.meshletGroup.meshletTriangles)
             {
-                file.write(reinterpret_cast<const char*>(&triangle), sizeof(triangle));
+                writeRaw(&triangle, sizeof(triangle));
             }
 
             // 4 bytes for name length
             uint32_t nameLength = static_cast<uint32_t>(subMesh.name.size());
-            file.write(reinterpret_cast<const char*>(&nameLength), sizeof(nameLength));
+            writeRaw(&nameLength, sizeof(nameLength));
 
             // N bytes for name
-            file.write(subMesh.name.c_str(), nameLength);
+            writeRaw(subMesh.name.c_str(), nameLength);
         }
 
         // 4 bytes for number of materials
         uint32_t materialCount = static_cast<uint32_t>(mesh.materials.size());
-        file.write(reinterpret_cast<const char*>(&materialCount), sizeof(materialCount));
+        writeRaw(&materialCount, sizeof(materialCount));
 
         // N materials
         for (const auto& material : mesh.materials)
         {
             // 16 bytes for material UUID
-            file.write(reinterpret_cast<const char*>(&material.uuid), sizeof(material.uuid));
+            writeRaw(&material.uuid, sizeof(material.uuid));
         }
 
         // name
         uint32_t nameLength = static_cast<uint32_t>(mesh.name.size());
-        file.write(reinterpret_cast<const char*>(&nameLength), sizeof(nameLength));
-        file.write(mesh.name.c_str(), nameLength);
+        writeRaw(&nameLength, sizeof(nameLength));
+        writeRaw(mesh.name.c_str(), nameLength);
+
+        // ------------------------------------------------------------
+        // Write file
+        // ------------------------------------------------------------
+        std::ofstream file(filePath, std::ios::binary);
+        if (!file)
+            return false;
+
+        // -------- Write container header --------
+        VMeshFileHeader header {};
+        memcpy(header.magic, "VMESH", 6);
+        header.version = 1;
+        header.flags   = (zstdLevel > 0) ? 1u : 0u;
+        header.rawSize = raw.size();
+
+        file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+        // -------- Write payload --------
+        if (zstdLevel <= 0)
+        {
+            // No compression
+            file.write(reinterpret_cast<const char*>(raw.data()), raw.size());
+        }
+        else
+        {
+            size_t const         bound = ZSTD_compressBound(raw.size());
+            std::vector<uint8_t> comp(bound);
+
+            size_t const cSize = ZSTD_compress(comp.data(), bound, raw.data(), raw.size(), zstdLevel);
+
+            if (ZSTD_isError(cSize))
+            {
+                std::cerr << "zstd compress failed: " << ZSTD_getErrorName(cSize) << std::endl;
+                return false;
+            }
+
+            file.write(reinterpret_cast<const char*>(comp.data()), cSize);
+        }
 
         file.close();
 
+        // ------------------------------------------------------------
         // Save meta file as json by nlohmann_json
+        // ------------------------------------------------------------
         auto metaFilePath = srcFilePath;
         metaFilePath.replace_extension(META_FILE_EXTENSION);
+
         VMeshMeta meta {};
         meta.uuid      = mesh.uuid;
         meta.extension = srcFilePath.extension().string();
+
         std::ofstream metaFile(metaFilePath);
         if (!metaFile)
             return false;
+
         metaFile << nlohmann::json {
             {"uuid", meta.uuid.toString()},
             {"extension", meta.extension},
@@ -169,20 +238,66 @@ namespace vasset
         if (!file)
             return false;
 
+        // ------------------------------------------------------------
+        // Read container header
+        // ------------------------------------------------------------
+        VMeshFileHeader header {};
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
+
+        if (std::string(header.magic) != "VMESH")
+            return false;
+
+        bool compressed = (header.flags & 1u) != 0;
+
+        // ------------------------------------------------------------
+        // Read payload (decompress if needed)
+        // ------------------------------------------------------------
+        std::vector<uint8_t> raw;
+
+        if (!compressed)
+        {
+            raw.resize(header.rawSize);
+            file.read(reinterpret_cast<char*>(raw.data()), header.rawSize);
+        }
+        else
+        {
+            std::vector<uint8_t> comp(std::istreambuf_iterator<char>(file), {});
+
+            raw.resize(header.rawSize);
+
+            size_t const dSize = ZSTD_decompress(raw.data(), raw.size(), comp.data(), comp.size());
+
+            if (ZSTD_isError(dSize))
+            {
+                std::cerr << "zstd decompress failed: " << ZSTD_getErrorName(dSize) << std::endl;
+                return false;
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Parse original VMESH format from memory
+        // ------------------------------------------------------------
+        size_t offset = 0;
+
+        auto readRaw = [&](void* dst, size_t size) {
+            memcpy(dst, raw.data() + offset, size);
+            offset += size;
+        };
+
         // 16 bytes for magic number
         char magic[16];
-        file.read(magic, sizeof(magic));
+        readRaw(magic, sizeof(magic));
         if (std::string(magic) != "VMESH")
             return false;
 
         // 16 bytes for UUID
-        file.read(reinterpret_cast<char*>(&outMesh.uuid), sizeof(outMesh.uuid));
+        readRaw(&outMesh.uuid, sizeof(outMesh.uuid));
 
         // 4 bytes for number of vertices
-        file.read(reinterpret_cast<char*>(&outMesh.vertexCount), sizeof(outMesh.vertexCount));
+        readRaw(&outMesh.vertexCount, sizeof(outMesh.vertexCount));
 
         // 4 bytes for vertex flags
-        file.read(reinterpret_cast<char*>(&outMesh.vertexFlags), sizeof(outMesh.vertexFlags));
+        readRaw(&outMesh.vertexFlags, sizeof(outMesh.vertexFlags));
 
         // N vertices
         outMesh.positions.resize(outMesh.vertexCount);
@@ -193,24 +308,25 @@ namespace vasset
         outMesh.tangents.resize(outMesh.vertexCount);
         outMesh.jointIndices.resize(outMesh.vertexCount);
         outMesh.jointWeights.resize(outMesh.vertexCount);
+
         for (uint32_t i = 0; i < outMesh.vertexCount; ++i)
         {
             if (outMesh.vertexFlags & VVertexFlags::ePosition)
-                file.read(reinterpret_cast<char*>(&outMesh.positions[i]), sizeof(VPosition));
+                readRaw(&outMesh.positions[i], sizeof(VPosition));
             if (outMesh.vertexFlags & VVertexFlags::eNormal)
-                file.read(reinterpret_cast<char*>(&outMesh.normals[i]), sizeof(VNormal));
+                readRaw(&outMesh.normals[i], sizeof(VNormal));
             if (outMesh.vertexFlags & VVertexFlags::eColor)
-                file.read(reinterpret_cast<char*>(&outMesh.colors[i]), sizeof(VColor));
+                readRaw(&outMesh.colors[i], sizeof(VColor));
             if (outMesh.vertexFlags & VVertexFlags::eTexCoord0)
-                file.read(reinterpret_cast<char*>(&outMesh.texCoords0[i]), sizeof(VTexCoord));
+                readRaw(&outMesh.texCoords0[i], sizeof(VTexCoord));
             if (outMesh.vertexFlags & VVertexFlags::eTexCoord1)
-                file.read(reinterpret_cast<char*>(&outMesh.texCoords1[i]), sizeof(VTexCoord));
+                readRaw(&outMesh.texCoords1[i], sizeof(VTexCoord));
             if (outMesh.vertexFlags & VVertexFlags::eTangent)
-                file.read(reinterpret_cast<char*>(&outMesh.tangents[i]), sizeof(VTangent));
+                readRaw(&outMesh.tangents[i], sizeof(VTangent));
             if (outMesh.vertexFlags & VVertexFlags::eJointIndices)
-                file.read(reinterpret_cast<char*>(&outMesh.jointIndices[i]), sizeof(VJointIndices));
+                readRaw(&outMesh.jointIndices[i], sizeof(VJointIndices));
             if (outMesh.vertexFlags & VVertexFlags::eJointWeights)
-                file.read(reinterpret_cast<char*>(&outMesh.jointWeights[i]), sizeof(VJointWeights));
+                readRaw(&outMesh.jointWeights[i], sizeof(VJointWeights));
         }
 
         // 4 bytes for number of indices

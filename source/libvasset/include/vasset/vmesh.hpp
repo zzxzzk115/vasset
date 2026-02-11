@@ -90,6 +90,9 @@ namespace vasset
         std::string extension; // original file extension
     };
 
-    bool saveMesh(const VMesh& mesh, const std::string& filePath, const std::filesystem::path& srcFilePath);
+    bool saveMesh(const VMesh&                 mesh,
+                  const std::string&           filePath,
+                  const std::filesystem::path& srcFilePath,
+                  int                          zstdLevel = 3);
     bool loadMesh(const std::string& filePath, VMesh& outMesh);
 } // namespace vasset
