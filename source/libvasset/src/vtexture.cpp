@@ -9,7 +9,7 @@ namespace vasset
 {
     constexpr const char* META_FILE_EXTENSION = ".vmeta";
 
-    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::filesystem::path& srcFilePath)
+    bool saveTexture(const VTexture& texture, vbase::StringView filePath, vbase::StringView srcFilePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
@@ -66,16 +66,18 @@ namespace vasset
         file.close();
 
         // Save meta file as json by nlohmann_json
-        auto metaFilePath = srcFilePath;
-        metaFilePath.replace_extension(META_FILE_EXTENSION);
+        auto srcFileOSPath  = std::filesystem::path(srcFilePath);
+        auto metaFileOSPath = srcFileOSPath;
+        metaFileOSPath.replace_extension(META_FILE_EXTENSION);
+
         VTextureMeta meta {};
         meta.uuid      = texture.uuid;
-        meta.extension = srcFilePath.extension().string();
-        std::ofstream metaFile(metaFilePath);
+        meta.extension = srcFileOSPath.extension().string();
+        std::ofstream metaFile(metaFileOSPath);
         if (!metaFile)
             return false;
         metaFile << nlohmann::json {
-            {"uuid", meta.uuid.toString()},
+            {"uuid", vbase::to_string(meta.uuid)},
             {"extension", meta.extension},
         };
         metaFile.close();
@@ -83,7 +85,7 @@ namespace vasset
         return true;
     }
 
-    bool loadTexture(const std::string& filePath, VTexture& outTexture)
+    bool loadTexture(vbase::StringView filePath, VTexture& outTexture)
     {
         // Binary reading
         std::ifstream file(filePath, std::ios::binary);

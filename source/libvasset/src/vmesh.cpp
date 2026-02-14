@@ -19,10 +19,10 @@ namespace vasset
         uint64_t rawSize;   // uncompressed size
     };
 
-    bool saveMesh(const VMesh&                 mesh,
-                  const std::string&           filePath,
-                  const std::filesystem::path& srcFilePath,
-                  int                          zstdLevel) // 0 = no compression
+    bool saveMesh(const VMesh&      mesh,
+                  vbase::StringView filePath,
+                  vbase::StringView srcFilePath,
+                  int               zstdLevel) // 0 = no compression
     {
         // ------------------------------------------------------------
         // Prepare output directory
@@ -211,19 +211,20 @@ namespace vasset
         // ------------------------------------------------------------
         // Save meta file as json by nlohmann_json
         // ------------------------------------------------------------
-        auto metaFilePath = srcFilePath;
-        metaFilePath.replace_extension(META_FILE_EXTENSION);
+        auto srcFileOSPath  = std::filesystem::path(srcFilePath);
+        auto metaFileOSPath = srcFileOSPath;
+        metaFileOSPath.replace_extension(META_FILE_EXTENSION);
 
         VMeshMeta meta {};
         meta.uuid      = mesh.uuid;
-        meta.extension = srcFilePath.extension().string();
+        meta.extension = srcFileOSPath.extension().string();
 
-        std::ofstream metaFile(metaFilePath);
+        std::ofstream metaFile(metaFileOSPath);
         if (!metaFile)
             return false;
 
         metaFile << nlohmann::json {
-            {"uuid", meta.uuid.toString()},
+            {"uuid", vbase::to_string(meta.uuid)},
             {"extension", meta.extension},
         };
         metaFile.close();
@@ -231,7 +232,7 @@ namespace vasset
         return true;
     }
 
-    bool loadMesh(const std::string& filePath, VMesh& outMesh)
+    bool loadMesh(vbase::StringView filePath, VMesh& outMesh)
     {
         // Binary reading
         std::ifstream file(filePath, std::ios::binary);

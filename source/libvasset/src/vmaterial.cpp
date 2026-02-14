@@ -5,7 +5,7 @@
 
 namespace vasset
 {
-    bool saveMaterial(const VMaterial& material, const std::string& filePath)
+    bool saveMaterial(const VMaterial& material, vbase::StringView filePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
@@ -89,7 +89,7 @@ namespace vasset
         return true;
     }
 
-    bool loadMaterial(const std::string& filePath, VMaterial& outMaterial)
+    bool loadMaterial(vbase::StringView filePath, VMaterial& outMaterial)
     {
         // Binary reading
         std::ifstream file(filePath, std::ios::binary);

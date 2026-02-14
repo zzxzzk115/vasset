@@ -10,7 +10,7 @@ namespace
     using json = nlohmann::json;
     using namespace vasset;
 
-    VAssetType fromString(const std::string& str)
+    VAssetType fromString(vbase::StringView str)
     {
         if (str == "texture")
             return VAssetType::eTexture;
@@ -35,17 +35,17 @@ namespace
 
 namespace vasset
 {
-    void VAssetRegistry::setImportedFolder(const std::string& folder) { m_ImportedFolder = folder; }
+    void VAssetRegistry::setImportedFolder(vbase::StringView folder) { m_ImportedFolder = folder; }
 
-    bool VAssetRegistry::registerAsset(const VUUID& uuid, const std::string& path, VAssetType type)
+    bool VAssetRegistry::registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type)
     {
-        m_Registry[uuid.toString()] = {path, type};
+        m_Registry[vbase::to_string(uuid)] = {path.data(), type};
         return true;
     }
 
-    bool VAssetRegistry::updateRegistry(const VUUID& uuid, const std::string& newPath)
+    bool VAssetRegistry::updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath)
     {
-        auto it = m_Registry.find(uuid.toString());
+        auto it = m_Registry.find(vbase::to_string(uuid));
         if (it == m_Registry.end())
         {
             return false;
@@ -55,9 +55,9 @@ namespace vasset
         return true;
     }
 
-    bool VAssetRegistry::unregisterAsset(const VUUID& uuid)
+    bool VAssetRegistry::unregisterAsset(const vbase::UUID& uuid)
     {
-        auto it = m_Registry.find(uuid.toString());
+        auto it = m_Registry.find(vbase::to_string(uuid));
         if (it == m_Registry.end())
         {
             return false;
@@ -67,9 +67,9 @@ namespace vasset
         return true;
     }
 
-    VAssetRegistry::AssetEntry VAssetRegistry::lookup(const VUUID& uuid) const
+    VAssetRegistry::AssetEntry VAssetRegistry::lookup(const vbase::UUID& uuid) const
     {
-        auto it = m_Registry.find(uuid.toString());
+        auto it = m_Registry.find(vbase::to_string(uuid));
         return it != m_Registry.end() ? it->second : AssetEntry {};
     }
 
@@ -78,7 +78,7 @@ namespace vasset
         return m_Registry;
     }
 
-    void VAssetRegistry::save(const std::string& filename) const
+    void VAssetRegistry::save(vbase::StringView filename) const
     {
         nlohmann::json j;
         for (const auto& [uuidStr, entry] : m_Registry)
@@ -91,7 +91,7 @@ namespace vasset
         out << j.dump(4);
     }
 
-    void VAssetRegistry::load(const std::string& filename)
+    void VAssetRegistry::load(vbase::StringView filename)
     {
         std::ifstream in(filename);
         if (!in.is_open())
@@ -125,7 +125,7 @@ namespace vasset
         }
     }
 
-    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, const std::string& assetName, bool relative) const
+    std::string VAssetRegistry::getImportedAssetPath(VAssetType type, vbase::StringView assetName, bool relative) const
     {
         std::string path;
 
@@ -134,7 +134,7 @@ namespace vasset
         if (assetName.empty())
         {
             // Use a random UUID as name to avoid collisions
-            finalAssetName = VUUID::generate().toString();
+            finalAssetName = vbase::to_string(vbase::uuid_random());
         }
         else
         {

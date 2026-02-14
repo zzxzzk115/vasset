@@ -2,6 +2,8 @@
 
 #include "vasset/vmesh.hpp"
 
+#include <vbase/core/string_view.hpp>
+
 #include <assimp/scene.h>
 
 #include <string>
@@ -31,7 +33,7 @@ namespace vasset
 
         VTextureImporter& setOptions(const ImportOptions& options);
 
-        bool importTexture(const std::string& filePath, VTexture& outTexture, bool forceReimport = false) const;
+        bool importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport = false) const;
 
     private:
         VAssetRegistry& m_Registry;
@@ -50,7 +52,7 @@ namespace vasset
 
         VMeshImporter& setOptions(const ImportOptions& options);
 
-        bool importMesh(const std::string& filePath, VMesh& outMesh, bool forceReimport = false);
+        bool importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
 
     private:
         void        processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
@@ -72,8 +74,8 @@ namespace vasset
     public:
         VAssetImporter(VAssetRegistry& registry);
 
-        bool importOrReimportAssetFolder(const std::string& folderPath, bool reimport = false);
-        bool importOrReimportAsset(const std::string& filePath, bool reimport = false);
+        bool importOrReimportAssetFolder(vbase::StringView folderPath, bool reimport = false);
+        bool importOrReimportAsset(vbase::StringView filePath, bool reimport = false);
 
         VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
         VTextureImporter& getTextureImporter() { return m_TextureImporter; }

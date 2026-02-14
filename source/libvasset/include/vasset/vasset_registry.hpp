@@ -1,7 +1,9 @@
 #pragma once
 
 #include "vasset/vasset_type.hpp"
-#include "vasset/vuuid.hpp"
+
+#include <vbase/core/string_view.hpp>
+#include <vbase/core/uuid.hpp>
 
 #include <string>
 #include <unordered_map>
@@ -22,23 +24,23 @@ namespace vasset
             }
         };
 
-        void setImportedFolder(const std::string& folder);
+        void setImportedFolder(vbase::StringView folder);
 
-        bool registerAsset(const VUUID& uuid, const std::string& path, VAssetType type);
-        bool updateRegistry(const VUUID& uuid, const std::string& newPath);
-        bool unregisterAsset(const VUUID& uuid);
+        bool registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type);
+        bool updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath);
+        bool unregisterAsset(const vbase::UUID& uuid);
 
-        AssetEntry lookup(const VUUID& uuid) const;
+        AssetEntry lookup(const vbase::UUID& uuid) const;
 
         const std::unordered_map<std::string, AssetEntry>& getRegistry() const;
 
-        void save(const std::string& filename) const;
+        void save(vbase::StringView filename) const;
 
-        void load(const std::string& filename);
+        void load(vbase::StringView filename);
 
         void cleanup();
 
-        std::string getImportedAssetPath(VAssetType type, const std::string& assetName, bool relative) const;
+        std::string getImportedAssetPath(VAssetType type, vbase::StringView assetName, bool relative) const;
 
     private:
         std::string m_ImportedFolder {"imported"};

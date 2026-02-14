@@ -9,8 +9,8 @@ set_languages("cxx23")
 
 -- root ?
 local is_root = (os.projectdir() == os.scriptdir())
-set_config("root", is_root)
-set_config("project_dir", os.scriptdir())
+set_config("vasset_root", is_root)
+set_config("vasset_project_dir", os.scriptdir())
 
 -- global options
 option("vasset_build_examples") -- build examples?
@@ -57,10 +57,10 @@ rule("copy_resources")
         local resource_files = target:values("resource_files")
         if resource_files then
             for _, pattern in ipairs(resource_files) do
-                pattern = path.join(get_config("project_dir"), pattern)
+                pattern = path.join(get_config("vasset_project_dir"), pattern)
                 local files = os.files(pattern)
                 for _, file in ipairs(files) do
-                    local relpath = path.relative(file, get_config("project_dir"))
+                    local relpath = path.relative(file, get_config("vasset_project_dir"))
                     local target_dir = path.join(target:targetdir(), path.directory(relpath))
                     os.mkdir(target_dir)
                     os.cp(file, target_dir)
@@ -74,10 +74,10 @@ rule("copy_resources")
         local resource_files = target:values("resource_files")
         if resource_files then
             for _, pattern in ipairs(resource_files) do
-                pattern = path.join(get_config("project_dir"), pattern)
+                pattern = path.join(get_config("vasset_project_dir"), pattern)
                 local files = os.files(pattern)
                 for _, file in ipairs(files) do
-                    local relpath = path.relative(file, get_config("project_dir"))
+                    local relpath = path.relative(file, get_config("vasset_project_dir"))
                     local target_dir = path.join(target:installdir(), "bin", path.directory(relpath))
                     os.mkdir(target_dir)
                     os.cp(file, target_dir)
