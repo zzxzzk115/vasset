@@ -1,9 +1,9 @@
 #pragma once
 
-#include "vasset/vuuid.hpp"
+#include <vbase/core/string_view.hpp>
+#include <vbase/core/uuid.hpp>
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -11,7 +11,7 @@ namespace vasset
 {
     struct VTextureRef
     {
-        VUUID uuid;
+        vbase::UUID uuid;
     };
 
     // Directly mapped to Vulkan VkFormat values
@@ -103,7 +103,7 @@ namespace vasset
 
     struct VTexture
     {
-        VUUID                uuid;
+        vbase::UUID          uuid;
         uint32_t             width {0};
         uint32_t             height {0};
         uint32_t             depth {1};
@@ -118,7 +118,7 @@ namespace vasset
 
         std::string toString() const
         {
-            return "VTexture { uuid: " + uuid.toString() + ", width: " + std::to_string(width) +
+            return "VTexture { uuid: " + vbase::to_string(uuid) + ", width: " + std::to_string(width) +
                    ", height: " + std::to_string(height) + ", depth: " + std::to_string(depth) +
                    ", mipLevels: " + std::to_string(mipLevels) + ", arrayLayers: " + std::to_string(arrayLayers) +
                    ", isCubemap: " + std::to_string(isCubemap) +
@@ -132,10 +132,10 @@ namespace vasset
 
     struct VTextureMeta
     {
-        VUUID       uuid;
+        vbase::UUID uuid;
         std::string extension; // original file extension
     };
 
-    bool saveTexture(const VTexture& texture, const std::string& filePath, const std::filesystem::path& srcFilePath);
-    bool loadTexture(const std::string& filePath, VTexture& outTexture);
+    bool saveTexture(const VTexture& texture, vbase::StringView filePath, vbase::StringView srcFilePath);
+    bool loadTexture(vbase::StringView filePath, VTexture& outTexture);
 } // namespace vasset

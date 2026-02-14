@@ -6,8 +6,6 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <filesystem>
-#include <string>
 #include <vector>
 
 namespace vasset
@@ -59,7 +57,7 @@ namespace vasset
 
     struct VMesh // -> aiNode
     {
-        VUUID uuid;
+        vbase::UUID uuid;
 
         uint32_t     vertexCount {0};
         VVertexFlags vertexFlags {VVertexFlags::eNone};
@@ -86,13 +84,10 @@ namespace vasset
 
     struct VMeshMeta
     {
-        VUUID       uuid;
+        vbase::UUID uuid;
         std::string extension; // original file extension
     };
 
-    bool saveMesh(const VMesh&                 mesh,
-                  const std::string&           filePath,
-                  const std::filesystem::path& srcFilePath,
-                  int                          zstdLevel = 3);
-    bool loadMesh(const std::string& filePath, VMesh& outMesh);
+    bool saveMesh(const VMesh& mesh, vbase::StringView filePath, vbase::StringView srcFilePath, int zstdLevel = 3);
+    bool loadMesh(vbase::StringView filePath, VMesh& outMesh);
 } // namespace vasset

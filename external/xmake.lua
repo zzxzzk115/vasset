@@ -5,3 +5,5 @@ target("dds-ktx")
     add_includedirs("dds-ktx", {public = true}) -- public: let other targets to auto include
     add_rules("utils.install.cmake_importfiles")
     add_rules("utils.install.pkgconfig_importfiles")
+
+includes("vfilesystem")

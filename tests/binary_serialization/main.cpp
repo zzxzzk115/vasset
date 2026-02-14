@@ -9,8 +9,8 @@ TEST(MaterialSerialization, BasicSerialization)
     VMaterial material {};
     material.name                   = "Test Material";
     material.type                   = VMaterialType::ePBRMetallicRoughness;
-    material.pbrMR.baseColor        = {1.0f, 0.0f, 0.0f, 1.0f};        // Red color
-    material.pbrMR.baseColorTexture = VTextureRef {VUUID::generate()}; // Dummy texture reference
+    material.pbrMR.baseColor        = {1.0f, 0.0f, 0.0f, 1.0f};           // Red color
+    material.pbrMR.baseColorTexture = VTextureRef {vbase::uuid_random()}; // Dummy texture reference
     material.pbrMR.metallicFactor   = 0.5f;
 
     // Serialize to binary
@@ -34,7 +34,7 @@ TEST(MeshSerialization, BasicSerialization)
 {
     VMesh mesh {};
     mesh.name        = "Test Mesh";
-    mesh.uuid        = VUUID::generate();
+    mesh.uuid        = vbase::uuid_random();
     mesh.vertexCount = 3;
     mesh.vertexFlags = VVertexFlags::ePosition | VVertexFlags::eNormal;
 
@@ -58,7 +58,7 @@ TEST(MeshSerialization, BasicSerialization)
 
     // Define a material reference
     VMaterialRef matRef {};
-    matRef.uuid = VUUID::generate(); // Dummy material UUID
+    matRef.uuid = vbase::uuid_random(); // Dummy material UUID
     mesh.materials.push_back(matRef);
 
     // Serialize to binary
@@ -97,7 +97,7 @@ TEST(MeshSerialization, BasicSerialization)
 TEST(TextureSerialization, BasicSerialization)
 {
     VTexture texture {};
-    texture.uuid       = VUUID::generate();
+    texture.uuid       = vbase::uuid_random();
     texture.width      = 256;
     texture.height     = 256;
     texture.format     = VTextureFormat::eRGBA8;
@@ -126,22 +126,23 @@ TEST(TextureSerialization, BasicSerialization)
 
 TEST(UUID, FilePath)
 {
-    std::string path = "imported/textures/example_texture.vtex";
-    VUUID       uuid1 = VUUID::fromFilePath(path);
-    VUUID       uuid2 = VUUID::fromFilePath(path);
+    std::string path  = "imported/textures/example_texture.vtex";
+    auto        uuid1 = vbase::uuid_from_string_key(path);
+    auto        uuid2 = vbase::uuid_from_string_key(path);
     ASSERT_EQ(uuid1, uuid2); // Same path should yield same UUID
-    ASSERT_FALSE(uuid1.isNil());
+    ASSERT_TRUE(uuid1.valid());
     std::string differentPath = "imported/textures/another_texture.vtex";
-    VUUID       uuid3 = VUUID::fromFilePath(differentPath);
+    auto        uuid3         = vbase::uuid_from_string_key(differentPath);
     ASSERT_NE(uuid1, uuid3); // Different paths should yield different UUIDs
-    ASSERT_FALSE(uuid3.isNil());
+    ASSERT_TRUE(uuid3.valid());
 }
 
 TEST(UUID, StringConversion)
 {
-    VUUID       originalUUID = VUUID::generate();
-    std::string uuidStr      = originalUUID.toString();
-    VUUID       parsedUUID   = VUUID::fromString(uuidStr);
+    auto        originalUUID = vbase::uuid_random();
+    std::string uuidStr      = vbase::to_string(originalUUID);
+    vbase::UUID parsedUUID;
+    vbase::try_parse_uuid(uuidStr.c_str(), parsedUUID);
     ASSERT_EQ(originalUUID, parsedUUID); // Conversion to string and back should yield same UUID
 }
 

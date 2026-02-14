@@ -21,7 +21,7 @@ target("vasset")
     add_files("src/**.cpp")
 
     -- add deps
-    add_deps("dds-ktx", {public = true})
+    add_deps("dds-ktx", "vfilesystem", {public = true})
 
     -- add packages
     add_packages("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", "assimp", { public = true })

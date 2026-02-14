@@ -28,23 +28,23 @@
 
 namespace
 {
-    bool isEXR(const std::string& ext) { return ext == ".exr"; }
+    bool isEXR(vbase::StringView ext) { return ext == ".exr"; }
 
-    bool isSTB(const std::string& ext)
+    bool isSTB(vbase::StringView ext)
     {
         return ext == ".hdr" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
                ext == ".gif" || ext == ".psd" || ext == ".pic";
     }
 
-    bool isKTXDDS(const std::string& ext) { return ext == ".ktx" || ext == ".dds"; }
+    bool isKTXDDS(vbase::StringView ext) { return ext == ".ktx" || ext == ".dds"; }
 
-    bool isKTX2(const std::string& ext) { return ext == ".ktx2"; }
+    bool isKTX2(vbase::StringView ext) { return ext == ".ktx2"; }
 
-    bool isCompressedTexture(const std::string& ext) { return isKTXDDS(ext) || isKTX2(ext); }
+    bool isCompressedTexture(vbase::StringView ext) { return isKTXDDS(ext) || isKTX2(ext); }
 
-    bool isValidTexture(const std::string& ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
+    bool isValidTexture(vbase::StringView ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
 
-    bool isValidModel(const std::string& ext)
+    bool isValidModel(vbase::StringView ext)
     {
         return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
     }
@@ -320,7 +320,7 @@ namespace vasset
         return *this;
     }
 
-    bool VTextureImporter::importTexture(const std::string& filePath, VTexture& outTexture, bool forceReimport) const
+    bool VTextureImporter::importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport) const
     {
         // ------------------------------------------------------------
         // RAII guards
@@ -358,7 +358,7 @@ namespace vasset
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
 
-        auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
+        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(filePath));
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing texture
@@ -367,7 +367,7 @@ namespace vasset
         }
 
         // Set UUID
-        outTexture.uuid = VUUID::fromFilePath(relativeImportedPath);
+        outTexture.uuid = vbase::uuid_from_string_key(relativeImportedPath);
 
         // Default target format
         auto targetFormat = m_Options.targetTextureFileFormat;
@@ -490,7 +490,7 @@ namespace vasset
             // ---------- STB ----------
             else if (isSTB(ext))
             {
-                auto* file = fopen(filePath.c_str(), "rb");
+                auto* file = fopen(filePath.data(), "rb");
                 if (!file)
                     return false;
 
@@ -623,7 +623,7 @@ namespace vasset
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
 
-        if (!saveTexture(outTexture, importedPath, osPath))
+        if (!saveTexture(outTexture, importedPath, osPath.generic_string()))
         {
             std::cerr << "Warning: Failed to save texture: " << importedPath << std::endl;
             return false;
@@ -642,7 +642,7 @@ namespace vasset
         return *this;
     }
 
-    bool VMeshImporter::importMesh(const std::string& filePath, VMesh& outMesh, bool forceReimport)
+    bool VMeshImporter::importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
     {
         // Check path
         std::filesystem::path osPath(filePath);
@@ -652,7 +652,7 @@ namespace vasset
         // Check registry
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
-        auto entry = m_Registry.lookup(VUUID::fromFilePath(relativeImportedPath));
+        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(relativeImportedPath));
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing mesh
@@ -661,7 +661,7 @@ namespace vasset
         }
 
         // Set UUID
-        outMesh.uuid = VUUID::fromFilePath(relativeImportedPath);
+        outMesh.uuid = vbase::uuid_from_string_key(relativeImportedPath);
 
         m_FilePath = filePath;
 
@@ -671,7 +671,7 @@ namespace vasset
                              aiProcess_CalcTangentSpace | aiProcess_GenSmoothNormals | aiProcess_GenUVCoords;
 
         Assimp::Importer importer {};
-        const aiScene*   scene = importer.ReadFile(filePath, flags);
+        const aiScene*   scene = importer.ReadFile(filePath.data(), flags);
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
             return false;
@@ -704,7 +704,7 @@ namespace vasset
 
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
-        if (!saveMesh(outMesh, importedPath, osPath))
+        if (!saveMesh(outMesh, importedPath, osPath.generic_string()))
         {
             std::cerr << "Warning: Failed to save mesh: " << importedPath << std::endl;
             return false;
@@ -839,7 +839,7 @@ namespace vasset
             const std::string relativeImportedPath =
                 m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, true);
 
-            auto uuid  = VUUID::fromFilePath(relativeImportedPath);
+            auto uuid  = vbase::uuid_from_string_key(relativeImportedPath);
             auto entry = m_Registry.lookup(uuid);
             if (entry.type != VAssetType::eUnknown)
             {
@@ -1105,7 +1105,7 @@ namespace vasset
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry)
     {}
 
-    bool VAssetImporter::importOrReimportAssetFolder(const std::string& folderPath, bool reimport)
+    bool VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath, bool reimport)
     {
         // Check path
         std::filesystem::path osPath(folderPath);
@@ -1162,7 +1162,7 @@ namespace vasset
         return true;
     }
 
-    bool VAssetImporter::importOrReimportAsset(const std::string& filePath, bool reimport)
+    bool VAssetImporter::importOrReimportAsset(vbase::StringView filePath, bool reimport)
     {
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))

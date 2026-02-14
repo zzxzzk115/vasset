@@ -2,6 +2,9 @@
 
 #include "vasset/vtexture.hpp"
 
+#include <vbase/core/string_view.hpp>
+#include <vbase/core/uuid.hpp>
+
 #include <glm/glm.hpp>
 
 #include <string>
@@ -31,7 +34,7 @@ namespace vasset
 
     struct VMaterialRef
     {
-        VUUID uuid;
+        vbase::UUID uuid;
     };
 
     struct VMaterialPBRMetallicRoughness
@@ -72,12 +75,12 @@ namespace vasset
 
     struct VMaterial
     {
-        VUUID                         uuid;
+        vbase::UUID                   uuid;
         VMaterialType                 type {VMaterialType::ePBRMetallicRoughness};
         VMaterialPBRMetallicRoughness pbrMR;
         std::string                   name;
     };
 
-    bool saveMaterial(const VMaterial& material, const std::string& filePath);
-    bool loadMaterial(const std::string& filePath, VMaterial& outMaterial);
+    bool saveMaterial(const VMaterial& material, vbase::StringView filePath);
+    bool loadMaterial(vbase::StringView filePath, VMaterial& outMaterial);
 } // namespace vasset
