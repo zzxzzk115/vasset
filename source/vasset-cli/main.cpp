@@ -107,7 +107,7 @@ static int cmd_pack(int argc, char** argv)
         }
 
         // Read cooked bytes from output path
-        const std::string& outPath = fs::path(assetRoot) / vi.value().output;
+        const std::string outPath = (fs::path(assetRoot) / vi.value().output).generic_string();
 
         std::ifstream f(outPath, std::ios::binary);
         if (!f)
