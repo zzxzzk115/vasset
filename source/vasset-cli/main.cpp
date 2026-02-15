@@ -71,6 +71,7 @@ static int cmd_pack(int argc, char** argv)
         if (a == "--zstd" && i + 1 < argc)
         {
             zstdLevel = argv[i + 1][0] - '0';
+            std::cout << "Using zstd compression level: " << zstdLevel << std::endl;
             ++i;
         }
     }

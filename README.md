@@ -20,15 +20,60 @@
 
 ## Features
 
-- Custom asset file formats: .vmesh, .vmat, .vtex
+- Custom asset file formats: VMesh, VTexture, VMaterial
 - Asset importers: VMeshImporter, VTextureImporter, VAssetImporter
 - Asset registry: Manage assets with UUIDs
+- Asset packer: Pack assets into a single VPK file
+- VPK filesystem: Mount VPK file with Virtual File System (from [vfilesystem](https://github.com/zzxzzk115/vfilesystem)) and load assets with URI based string
 - Library & CLI: `vasset` and `vasset-cli` can be integrated into engines
 
 ## CLI Usage
 
-```bash
-./vasset-cli <asset-folder> <imported-folder> [working-directory]
+```
+./vasset-cli import <asset-root>
+./vasset-cli pack <asset-root> <out.vpk> [--zstd <zstd-level>]
+```
+
+## VPK Loading Example
+
+```cpp
+#include <vasset/vasset.hpp>
+#include <vfilesystem/vfs/virtual_filesystem.hpp>
+
+#include <iostream>
+
+using namespace vasset;
+
+int main()
+{
+    auto vpkFS = std::make_shared<VpkFileSystem>("out.vpk");
+    vpkFS->openPackage();
+
+    vfilesystem::VirtualFileSystem vfs {};
+    vfs.mount(vpkFS, "res");
+
+    // Load mesh
+    auto r = vfs.open("res://models/DamagedHelmet/DamagedHelmet.gltf", vfilesystem::FileMode::eRead);
+
+    auto vpkMemFile = std::move(r.value());
+
+    VMesh mesh {};
+    auto  res = loadMeshFromMemory(vpkMemFile->readAllBytes(), mesh);
+
+    std::cout << "Loaded mesh (res://models/DamagedHelmet/DamagedHelmet.gltf) from VPK: " << mesh.name << " with " << mesh.vertexCount << " vertices." << std::endl;
+
+    // Load texture
+    r = vfs.open("res://textures/awesomeface.png", vfilesystem::FileMode::eRead);
+
+    vpkMemFile = std::move(r.value());
+
+    VTexture texture {};
+    res = loadTextureFromMemory(vpkMemFile->readAllBytes(), texture);
+
+    std::cout << "Loaded texture (res://textures/awesomeface.png) from VPK: " << " (" << texture.width << "x" << texture.height << ")" << std::endl;
+
+    return 0;
+}
 ```
 
 ## Build Instructions
@@ -48,13 +93,14 @@ Step-by-Step:
 - Clone the project:
 
   ```bash
-  git clone https://github.com/zzxzzk115/vasset.git
+  git clone --recursive https://github.com/zzxzzk115/vasset.git
   ```
 
 - Build the project:
 
   ```bash
   cd vasset
+  git submodule update --init --recursive
   xmake -vD
   ```
 
@@ -66,18 +112,17 @@ Step-by-Step:
   ```
 
 - Run the CLI:
+
   ```bash
-  xmake run vasset-cli import <asset-folder> <imported-folder> [working-directory]
+  xmake run vasset-cli import <asset-root>
   # example
-  xmake run vasset-cli import resources imported <path-to-vasset-project-root>
-  # example for Powershell on Windows
-  xmake run vasset-cli import resources imported $pwd
+  xmake run vasset-cli import /path/to/resources
   ```
 
   ```bash
-  xmake run vasset-cli pack <asset-root> <out.vpk>
+  xmake run vasset-cli pack <asset-root>  <out.vpk> [--zstd <zstd-level>]
   # example
-  xmake run vasset-cli pack resources resources.vpk
+  xmake run vasset-cli pack /path/to/resources /path/to/resources.vpk --zstd 6
   ```
 
 ## License
