@@ -1,7 +1,9 @@
 #pragma once
 
+#include "vasset/asset_error.hpp"
 #include "vasset/vmesh.hpp"
 
+#include <vbase/core/result.hpp>
 #include <vbase/core/string_view.hpp>
 
 #include <assimp/scene.h>
@@ -33,7 +35,8 @@ namespace vasset
 
         VTextureImporter& setOptions(const ImportOptions& options);
 
-        bool importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport = false) const;
+        vbase::Result<void, AssetError>
+        importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport = false) const;
 
     private:
         VAssetRegistry& m_Registry;
@@ -52,7 +55,8 @@ namespace vasset
 
         VMeshImporter& setOptions(const ImportOptions& options);
 
-        bool importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
+        vbase::Result<void, AssetError>
+        importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
 
     private:
         void        processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
@@ -74,8 +78,9 @@ namespace vasset
     public:
         VAssetImporter(VAssetRegistry& registry);
 
-        bool importOrReimportAssetFolder(vbase::StringView folderPath, bool reimport = false);
-        bool importOrReimportAsset(vbase::StringView filePath, bool reimport = false);
+        vbase::Result<void, AssetError> importOrReimportAssetFolder(vbase::StringView folderPath,
+                                                                    bool              reimport = false);
+        vbase::Result<void, AssetError> importOrReimportAsset(vbase::StringView filePath, bool reimport = false);
 
         VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
         VTextureImporter& getTextureImporter() { return m_TextureImporter; }

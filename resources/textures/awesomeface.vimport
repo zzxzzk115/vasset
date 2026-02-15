@@ -1,0 +1,12 @@
+[vimport]
+version=1
+importer="texture"
+uid="b2c10d2f6f43a0662fb3e908e149936b"
+
+[source]
+file="textures/awesomeface.png"
+
+[output]
+file="imported/texture/awesomeface"
+
+[params]

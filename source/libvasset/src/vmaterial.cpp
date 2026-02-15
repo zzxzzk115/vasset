@@ -1,19 +1,22 @@
 #include "vasset/vmaterial.hpp"
+#include "vasset/asset_error.hpp"
+
+#include <vbase/core/result.hpp>
 
 #include <filesystem>
 #include <fstream>
 
 namespace vasset
 {
-    bool saveMaterial(const VMaterial& material, vbase::StringView filePath)
+    vbase::Result<void, AssetError> saveMaterial(const VMaterial& material, vbase::StringView filePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
         if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
             std::filesystem::create_directories(path.parent_path());
-        std::ofstream file(filePath, std::ios::binary);
+        std::ofstream file(std::string(filePath), std::ios::binary);
         if (!file)
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
         // 16 bytes for magic number
         const char magic[16] = "VMATERIAL\0";
@@ -86,21 +89,21 @@ namespace vasset
 
         file.close();
 
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    bool loadMaterial(vbase::StringView filePath, VMaterial& outMaterial)
+    vbase::Result<void, AssetError> loadMaterial(vbase::StringView filePath, VMaterial& outMaterial)
     {
         // Binary reading
-        std::ifstream file(filePath, std::ios::binary);
+        std::ifstream file(std::string(filePath), std::ios::binary);
         if (!file)
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
         // 16 bytes for magic number
         char magic[16];
         file.read(magic, sizeof(magic));
         if (std::string(magic) != "VMATERIAL")
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         // 4 bytes for UUID
         file.read(reinterpret_cast<char*>(&outMaterial.uuid), sizeof(outMaterial.uuid));
@@ -169,6 +172,6 @@ namespace vasset
 
         file.close();
 
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 } // namespace vasset

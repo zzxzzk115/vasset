@@ -1,23 +1,22 @@
 #include "vasset/vtexture.hpp"
+#include "vasset/asset_error.hpp"
 
-#include <nlohmann/json.hpp>
+#include <vbase/core/result.hpp>
 
 #include <filesystem>
 #include <fstream>
 
 namespace vasset
 {
-    constexpr const char* META_FILE_EXTENSION = ".vmeta";
-
-    bool saveTexture(const VTexture& texture, vbase::StringView filePath, vbase::StringView srcFilePath)
+    vbase::Result<void, AssetError> saveTexture(const VTexture& texture, vbase::StringView filePath)
     {
         // Binary writing
         std::filesystem::path path(filePath);
         if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
             std::filesystem::create_directories(path.parent_path());
-        std::ofstream file(filePath, std::ios::binary);
+        std::ofstream file(std::string(filePath), std::ios::binary);
         if (!file)
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         // 16 bytes for magic number
         const char magic[16] = "VTEXTURE\0";
@@ -65,82 +64,106 @@ namespace vasset
 
         file.close();
 
-        // Save meta file as json by nlohmann_json
-        auto srcFileOSPath  = std::filesystem::path(srcFilePath);
-        auto metaFileOSPath = srcFileOSPath;
-        metaFileOSPath.replace_extension(META_FILE_EXTENSION);
-
-        VTextureMeta meta {};
-        meta.uuid      = texture.uuid;
-        meta.extension = srcFileOSPath.extension().string();
-        std::ofstream metaFile(metaFileOSPath);
-        if (!metaFile)
-            return false;
-        metaFile << nlohmann::json {
-            {"uuid", vbase::to_string(meta.uuid)},
-            {"extension", meta.extension},
-        };
-        metaFile.close();
-
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    bool loadTexture(vbase::StringView filePath, VTexture& outTexture)
+    vbase::Result<void, AssetError> loadTexture(vbase::StringView filePath, VTexture& outTexture)
     {
-        // Binary reading
-        std::ifstream file(filePath, std::ios::binary);
-        if (!file)
-            return false;
+        struct FileGuard
+        {
+            std::ifstream file;
+            ~FileGuard()
+            {
+                if (file.is_open())
+                    file.close();
+            }
+        } fileGuard;
+
+        fileGuard.file = std::ifstream(std::string(filePath), std::ios::binary);
+        if (!fileGuard.file)
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
+
+        std::streamsize size = fileGuard.file.tellg();
+        fileGuard.file.seekg(0, std::ios::beg);
+
+        if (size <= 0)
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        std::vector<std::byte> buffer(size);
+
+        if (!fileGuard.file.read(reinterpret_cast<char*>(buffer.data()), size))
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        return loadTextureFromMemory(buffer, outTexture);
+    }
+
+    vbase::Result<void, AssetError> loadTextureFromMemory(const std::vector<std::byte>& data, VTexture& outTexture)
+    {
+        if (data.size() < 16 + 16 + 4 * 9) // minimum size check (magic + uuid + 9 uint32 fields)
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        size_t offset = 0;
+
+        auto readSafe = [&](void* dst, size_t size) -> bool {
+            if (offset + size > data.size())
+                return false;
+
+            std::memcpy(dst, data.data() + offset, size);
+            offset += size;
+            return true;
+        };
 
         // 16 bytes for magic number
         char magic[16];
-        file.read(magic, sizeof(magic));
+        readSafe(magic, sizeof(magic));
         if (std::string(magic) != "VTEXTURE")
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         // 16 bytes for UUID
-        file.read(reinterpret_cast<char*>(&outTexture.uuid), sizeof(outTexture.uuid));
+        readSafe(&outTexture.uuid, sizeof(outTexture.uuid));
 
         // 4 bytes for width
-        file.read(reinterpret_cast<char*>(&outTexture.width), sizeof(outTexture.width));
+        readSafe(&outTexture.width, sizeof(outTexture.width));
 
         // 4 bytes for height
-        file.read(reinterpret_cast<char*>(&outTexture.height), sizeof(outTexture.height));
+        readSafe(&outTexture.height, sizeof(outTexture.height));
 
         // 4 bytes for depth
-        file.read(reinterpret_cast<char*>(&outTexture.depth), sizeof(outTexture.depth));
+        readSafe(&outTexture.depth, sizeof(outTexture.depth));
 
         // 4 bytes for mip levels
-        file.read(reinterpret_cast<char*>(&outTexture.mipLevels), sizeof(outTexture.mipLevels));
+        readSafe(&outTexture.mipLevels, sizeof(outTexture.mipLevels));
 
         // 4 bytes for array layers
-        file.read(reinterpret_cast<char*>(&outTexture.arrayLayers), sizeof(outTexture.arrayLayers));
+        readSafe(&outTexture.arrayLayers, sizeof(outTexture.arrayLayers));
 
         // 4 bytes for isCubemap
-        file.read(reinterpret_cast<char*>(&outTexture.isCubemap), sizeof(outTexture.isCubemap));
+        readSafe(&outTexture.isCubemap, sizeof(outTexture.isCubemap));
 
         // 4 bytes for generateMipmaps
-        file.read(reinterpret_cast<char*>(&outTexture.generateMipmaps), sizeof(outTexture.generateMipmaps));
+        readSafe(&outTexture.generateMipmaps, sizeof(outTexture.generateMipmaps));
 
         // 4 bytes for type
-        file.read(reinterpret_cast<char*>(&outTexture.type), sizeof(outTexture.type));
+        readSafe(&outTexture.type, sizeof(outTexture.type));
 
         // 4 bytes for format
-        file.read(reinterpret_cast<char*>(&outTexture.format), sizeof(outTexture.format));
+        readSafe(&outTexture.format, sizeof(outTexture.format));
 
         // 4 bytes for file format
-        file.read(reinterpret_cast<char*>(&outTexture.fileFormat), sizeof(outTexture.fileFormat));
+        readSafe(&outTexture.fileFormat, sizeof(outTexture.fileFormat));
 
         // 4 bytes for data size
         uint32_t dataSize = 0;
-        file.read(reinterpret_cast<char*>(&dataSize), sizeof(dataSize));
+        readSafe(&dataSize, sizeof(dataSize));
+
+        if (offset + dataSize > data.size())
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         // N bytes for data
         outTexture.data.resize(dataSize);
-        file.read(reinterpret_cast<char*>(outTexture.data.data()), dataSize);
+        std::memcpy(outTexture.data.data(), data.data() + offset, dataSize);
+        offset += dataSize;
 
-        file.close();
-
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 } // namespace vasset

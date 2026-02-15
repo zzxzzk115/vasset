@@ -1,7 +1,9 @@
 #pragma once
 
+#include "vasset/asset_error.hpp"
 #include "vasset/vtexture.hpp"
 
+#include <vbase/core/result.hpp>
 #include <vbase/core/string_view.hpp>
 #include <vbase/core/uuid.hpp>
 
@@ -81,6 +83,6 @@ namespace vasset
         std::string                   name;
     };
 
-    bool saveMaterial(const VMaterial& material, vbase::StringView filePath);
-    bool loadMaterial(vbase::StringView filePath, VMaterial& outMaterial);
+    vbase::Result<void, AssetError> saveMaterial(const VMaterial& material, vbase::StringView filePath);
+    vbase::Result<void, AssetError> loadMaterial(vbase::StringView filePath, VMaterial& outMaterial);
 } // namespace vasset

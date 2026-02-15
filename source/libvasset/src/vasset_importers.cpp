@@ -1,5 +1,9 @@
 #include "vasset/vasset_importers.hpp"
 #include "vasset/vasset_registry.hpp"
+#include "vasset/vasset_type.hpp"
+#include "vasset/vimport.hpp"
+
+#include <vbase/core/result.hpp>
 
 #include <ktx.h>
 
@@ -256,7 +260,7 @@ namespace
                     break;
                 }
                 default: {
-                    std::cerr << "Warning: Unsupported material property type: " << prop->mType
+                    std::cout << "Warning: Unsupported material property type: " << prop->mType
                               << " for key: " << prop->mKey.C_Str() << std::endl;
                     break;
                 }
@@ -320,7 +324,8 @@ namespace vasset
         return *this;
     }
 
-    bool VTextureImporter::importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport) const
+    vbase::Result<void, AssetError>
+    VTextureImporter::importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport) const
     {
         // ------------------------------------------------------------
         // RAII guards
@@ -350,11 +355,12 @@ namespace vasset
         // ------------------------------------------------------------
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
         // ------------------------------------------------------------
         // Check registry
         // ------------------------------------------------------------
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.string(), true);
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
 
@@ -363,7 +369,7 @@ namespace vasset
         {
             // Load existing texture
             std::cout << "Texture already imported: " << entry.path << std::endl;
-            return true;
+            return vbase::Result<void, AssetError>::ok();
         }
 
         // Set UUID
@@ -392,13 +398,13 @@ namespace vasset
 
             auto fileBytes = readAll(path);
             if (fileBytes.empty())
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
             ddsktx_texture_info tc {0};
 
             if (!ddsktx_parse(&tc, fileBytes.data(), static_cast<int>(fileBytes.size()), nullptr))
             {
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             // Fill outTexture
@@ -423,21 +429,21 @@ namespace vasset
         {
             std::ifstream file(filePath, std::ios::binary | std::ios::ate);
             if (!file)
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
             std::streamsize size = file.tellg();
             file.seekg(0, std::ios::beg);
 
             std::vector<char> bytes(size);
             if (!file.read(bytes.data(), size))
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
             if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(bytes.data()),
                                              size,
                                              KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
                                              &ktxGuard.p) != KTX_SUCCESS)
             {
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             auto* kTexture = ktxGuard.p;
@@ -477,7 +483,7 @@ namespace vasset
                         std::cerr << "Failed to load EXR image: " << err << std::endl;
                         FreeEXRErrorMessage(err);
                     }
-                    return false;
+                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
                 }
 
                 pixelGuard.p = img;
@@ -492,7 +498,7 @@ namespace vasset
             {
                 auto* file = fopen(filePath.data(), "rb");
                 if (!file)
-                    return false;
+                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
                 hdr = stbi_is_hdr_from_file(file);
 
@@ -511,12 +517,12 @@ namespace vasset
                 fclose(file);
 
                 if (!pixelGuard.p)
-                    return false;
+                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
             else
             {
                 std::cerr << "Unsupported image format: " << ext << std::endl;
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             // Treat everything as RGBA
@@ -528,7 +534,7 @@ namespace vasset
 
             if (targetFormat == VTextureFileFormat::eKTX || targetFormat == VTextureFileFormat::eDDS)
             {
-                std::cerr << "Warning: Target texture file format KTX or DDS "
+                std::cout << "Warning: Target texture file format KTX or DDS "
                              "is not supported for image files. Defaulting to KTX2."
                           << std::endl;
 
@@ -571,14 +577,14 @@ namespace vasset
 
             if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktxGuard.p) != KTX_SUCCESS)
             {
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             if (ktxTexture_SetImageFromMemory(
                     ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixelGuard.p), srcSize) !=
                 KTX_SUCCESS)
             {
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             // ---------- BasisU Compression ----------
@@ -600,7 +606,7 @@ namespace vasset
             ktx_uint8_t* mem  = nullptr;
             if (ktxTexture_WriteToMemory(ktxTexture(ktxGuard.p), &mem, &size) != KTX_SUCCESS)
             {
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
             }
 
             // ---------- Fill outTexture ----------
@@ -623,15 +629,28 @@ namespace vasset
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
 
-        if (!saveTexture(outTexture, importedPath, osPath.generic_string()))
+        auto sr_tex = saveTexture(outTexture, importedPath);
+        if (!sr_tex)
         {
-            std::cerr << "Warning: Failed to save texture: " << importedPath << std::endl;
-            return false;
+            std::cerr << "Failed to save texture." << std::endl;
+            return vbase::Result<void, AssetError>::err(sr_tex.error());
         }
 
-        m_Registry.registerAsset(outTexture.uuid, relativeImportedPath, VAssetType::eTexture);
+        // Save VImport
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eTexture);
+        vimport.uid      = outTexture.uuid;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+        // TODO: params
+        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
+        if (!sr_import)
+            return vbase::Result<void, AssetError>::err(sr_import.error());
 
-        return true;
+        auto rr = m_Registry.registerAsset(outTexture.uuid, relativeImportedPath, VAssetType::eTexture);
+        if (!rr)
+            return vbase::Result<void, AssetError>::err(rr.error());
+        return vbase::Result<void, AssetError>::ok();
     }
 
     VMeshImporter::VMeshImporter(VAssetRegistry& registry) : m_Registry(registry), m_TextureImporter(registry) {}
@@ -642,14 +661,16 @@ namespace vasset
         return *this;
     }
 
-    bool VMeshImporter::importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
+    vbase::Result<void, AssetError>
+    VMeshImporter::importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
     {
         // Check path
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
         // Check registry
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.string(), true);
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
         auto entry = m_Registry.lookup(vbase::uuid_from_string_key(relativeImportedPath));
@@ -657,7 +678,7 @@ namespace vasset
         {
             // Load existing mesh
             std::cout << "Mesh already imported: " << entry.path << std::endl;
-            return true;
+            return vbase::Result<void, AssetError>::ok();
         }
 
         // Set UUID
@@ -674,7 +695,7 @@ namespace vasset
         const aiScene*   scene = importer.ReadFile(filePath.data(), flags);
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
         outMesh.name           = scene->mRootNode->mName.C_Str();
         outMesh.sourceFileName = osPath.stem().string();
@@ -704,14 +725,29 @@ namespace vasset
 
         const std::string importedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
-        if (!saveMesh(outMesh, importedPath, osPath.generic_string()))
-        {
-            std::cerr << "Warning: Failed to save mesh: " << importedPath << std::endl;
-            return false;
-        }
-        m_Registry.registerAsset(outMesh.uuid, relativeImportedPath, VAssetType::eMesh);
 
-        return true;
+        auto sr_mesh = saveMesh(outMesh, importedPath, 3);
+        if (!sr_mesh)
+        {
+            std::cerr << "Failed to save mesh." << std::endl;
+            return vbase::Result<void, AssetError>::err(sr_mesh.error());
+        }
+
+        // Save VImport
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eMesh);
+        vimport.uid      = outMesh.uuid;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+        // TODO: params
+        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
+        if (!sr_import)
+            return vbase::Result<void, AssetError>::err(sr_import.error());
+
+        auto rr = m_Registry.registerAsset(outMesh.uuid, relativeImportedPath, VAssetType::eMesh);
+        if (!rr)
+            return vbase::Result<void, AssetError>::err(rr.error());
+        return vbase::Result<void, AssetError>::ok();
     }
 
     void VMeshImporter::processNode(const aiNode* node, const aiScene* scene, VMesh& outMesh) const
@@ -812,7 +848,7 @@ namespace vasset
             aiFace face = mesh->mFaces[i];
             if (face.mNumIndices != 3)
             {
-                std::cerr << "Warning: Non-triangulated face found in mesh: " << mesh->mName.C_Str() << std::endl;
+                std::cout << "Warning: Non-triangulated face found in mesh: " << mesh->mName.C_Str() << std::endl;
                 continue;
             }
             for (unsigned int j = 0; j < face.mNumIndices; ++j)
@@ -857,11 +893,19 @@ namespace vasset
 
                 const std::string importedPath =
                     m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, false);
-                if (!saveMaterial(vMat, importedPath))
+
+                auto sm = saveMaterial(vMat, importedPath);
+                if (!sm)
                 {
-                    std::cerr << "Warning: Failed to save material: " << importedPath << std::endl;
+                    std::cerr << "Failed to save material: " << importedPath << std::endl;
                 }
-                m_Registry.registerAsset(vMat.uuid, relativeImportedPath, VAssetType::eMaterial);
+
+                auto rr = m_Registry.registerAsset(vMat.uuid, relativeImportedPath, VAssetType::eMaterial);
+                if (!rr)
+                {
+                    std::cerr << "Failed to register asset: " << relativeImportedPath << std::endl;
+                }
+
                 outMesh.materials.push_back(VMaterialRef {vMat.uuid});
             }
         }
@@ -982,7 +1026,7 @@ namespace vasset
         {
             if (!v.parsed)
             {
-                std::cerr << "Warning: Unhandled material property: " << k.key << " (semantic: " << k.semantic
+                std::cout << "Warning: Unhandled material property: " << k.key << " (semantic: " << k.semantic
                           << ", index: " << k.index << ")" << std::endl;
             }
         }
@@ -1105,107 +1149,67 @@ namespace vasset
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry)
     {}
 
-    bool VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath, bool reimport)
+    vbase::Result<void, AssetError> VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath,
+                                                                                bool              reimport)
     {
-        // Check path
         std::filesystem::path osPath(folderPath);
         if (!std::filesystem::exists(osPath) || !std::filesystem::is_directory(osPath))
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
-        // Iterate over files in the directory
-        for (const auto& entry : std::filesystem::directory_iterator(osPath))
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(osPath))
         {
-            if (entry.is_regular_file())
-            {
-                std::string filePath = entry.path().string();
-                std::string ext      = entry.path().extension().string();
+            if (!entry.is_regular_file())
+                continue;
 
-                if (isValidTexture(ext))
-                {
-                    VTexture texture;
-                    if (m_TextureImporter.importTexture(filePath, texture, reimport))
-                    {
-                        std::cout << "Imported texture: " << filePath << std::endl;
-                    }
-                    else
-                    {
-                        std::cerr << "Failed to import texture: " << filePath << std::endl;
-                    }
-                }
-                else if (isValidModel(ext))
-                {
-                    VMesh mesh;
-                    if (m_MeshImporter.importMesh(filePath, mesh, reimport))
-                    {
-                        std::cout << "Imported mesh: " << filePath << std::endl;
-                    }
-                    else
-                    {
-                        std::cerr << "Failed to import mesh: " << filePath << std::endl;
-                    }
-                }
-                // else
-                // {
-                //     std::cout << "Unsupported file type, skipping: " << filePath << std::endl;
-                // }
-            }
-            else if (entry.is_directory())
+            const std::string filePath = entry.path().string();
+            const std::string ext      = entry.path().extension().string();
+
+            if (isValidTexture(ext))
             {
-                // Recursively import from subdirectories
-                if (!importOrReimportAssetFolder(entry.path().string(), reimport))
-                {
-                    std::cerr << "Failed to import assets from folder: " << entry.path().string() << std::endl;
-                }
+                VTexture texture;
+                auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
+                if (!tr)
+                    return vbase::Result<void, AssetError>::err(tr.error());
+            }
+            else if (isValidModel(ext))
+            {
+                VMesh mesh;
+                auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
+                if (!mr)
+                    return vbase::Result<void, AssetError>::err(mr.error());
             }
         }
 
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    bool VAssetImporter::importOrReimportAsset(vbase::StringView filePath, bool reimport)
+    vbase::Result<void, AssetError> VAssetImporter::importOrReimportAsset(vbase::StringView filePath, bool reimport)
     {
         std::filesystem::path osPath(filePath);
-        if (!std::filesystem::exists(osPath))
-            return false;
+        if (!std::filesystem::exists(osPath) || std::filesystem::is_directory(osPath))
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
-        if (std::filesystem::is_directory(osPath))
-        {
-            std::cerr << "Provided path is a directory, expected a file: " << filePath << std::endl;
-            return false;
-        }
-
-        std::string ext = osPath.extension().string();
+        const std::string ext = osPath.extension().string();
 
         if (isValidTexture(ext))
         {
             VTexture texture;
-            if (m_TextureImporter.importTexture(filePath, texture, reimport))
-            {
-                std::cout << "Imported/Reimported texture: " << filePath << std::endl;
-                return true;
-            }
-            else
-            {
-                std::cerr << "Failed to import/reimport texture: " << filePath << std::endl;
-                return false;
-            }
-        }
-        else if (isValidModel(ext))
-        {
-            VMesh mesh;
-            if (m_MeshImporter.importMesh(filePath, mesh, reimport))
-            {
-                std::cout << "Imported/Reimported mesh: " << filePath << std::endl;
-                return true;
-            }
-            else
-            {
-                std::cerr << "Failed to import/reimport mesh: " << filePath << std::endl;
-                return false;
-            }
+            auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
+            if (!tr)
+                return vbase::Result<void, AssetError>::err(tr.error());
+            return vbase::Result<void, AssetError>::ok();
         }
 
-        std::cerr << "Unsupported asset type for import/reimport: " << filePath << std::endl;
-        return false;
+        if (isValidModel(ext))
+        {
+            VMesh mesh;
+            auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
+            if (!mr)
+                return vbase::Result<void, AssetError>::err(mr.error());
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        return vbase::Result<void, AssetError>::err(AssetError::eNotSupported);
     }
+
 } // namespace vasset

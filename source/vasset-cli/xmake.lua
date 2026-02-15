@@ -17,7 +17,7 @@ target("vasset-cli")
     end
 
     -- default run arguments
-    set_runargs("resources", "imported", "$(projectdir)")
+    set_runargs("import", "$(projectdir)/resources")
 
     -- set target directory
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset-cli")

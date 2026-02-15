@@ -8,15 +8,15 @@ using namespace vasset;
 int main()
 {
     VAssetRegistry registry {};
-    registry.setImportedFolder("imported");
+    registry.setImportedFolderName("imported");
     if (!std::filesystem::exists("imported"))
     {
         std::filesystem::create_directory("imported");
     }
 
-    if (std::filesystem::exists("imported/asset_registry.json"))
+    if (std::filesystem::exists("imported/asset_registry.vreg"))
     {
-        registry.load("imported/asset_registry.json");
+        registry.load("imported/asset_registry.vreg");
         std::cout << "Loaded existing asset registry with " << registry.getRegistry().size() << " entries."
                   << std::endl;
     }
@@ -24,10 +24,10 @@ int main()
     VAssetImporter assetImporter {registry};
     assetImporter.importOrReimportAssetFolder("resources");
 
-    registry.save("imported/asset_registry.json");
+    registry.save("imported/asset_registry.vreg");
 
     VAssetRegistry loadedRegistry {};
-    loadedRegistry.load("imported/asset_registry.json");
+    loadedRegistry.load("imported/asset_registry.vreg");
 
     std::cout << "Loaded registry:" << std::endl;
     const auto& reg = loadedRegistry.getRegistry();
@@ -41,7 +41,7 @@ int main()
     {
         if (entry.type == VAssetType::eMesh)
         {
-            std::string meshPath = "imported/" + entry.path;
+            std::string meshPath = entry.path;
             VMesh       mesh {};
             if (loadMesh(meshPath, mesh))
             {

@@ -1,4 +1,4 @@
-add_requires("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
+add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
 add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
 if is_plat("windows") then
     add_requires("ktx-windows")
@@ -24,7 +24,7 @@ target("vasset")
     add_deps("dds-ktx", "vfilesystem", {public = true})
 
     -- add packages
-    add_packages("glm", "nlohmann_json", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", "assimp", { public = true })
+    add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", "assimp", { public = true })
     if is_plat("windows") then
         add_packages("ktx-windows", { public = true })
     else

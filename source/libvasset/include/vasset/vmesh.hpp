@@ -82,12 +82,7 @@ namespace vasset
         std::string sourceFileName; // Not serialized
     };
 
-    struct VMeshMeta
-    {
-        vbase::UUID uuid;
-        std::string extension; // original file extension
-    };
-
-    bool saveMesh(const VMesh& mesh, vbase::StringView filePath, vbase::StringView srcFilePath, int zstdLevel = 3);
-    bool loadMesh(vbase::StringView filePath, VMesh& outMesh);
+    vbase::Result<void, AssetError> saveMesh(const VMesh& mesh, vbase::StringView filePath, int zstdLevel = 3);
+    vbase::Result<void, AssetError> loadMesh(vbase::StringView filePath, VMesh& outMesh);
+    vbase::Result<void, AssetError> loadMeshFromMemory(const std::vector<std::byte>& data, VMesh& outMesh);
 } // namespace vasset

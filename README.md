@@ -67,11 +67,17 @@ Step-by-Step:
 
 - Run the CLI:
   ```bash
-  xmake run vasset-cli <asset-folder> <imported-folder> [working-directory]
+  xmake run vasset-cli import <asset-folder> <imported-folder> [working-directory]
   # example
-  xmake run vasset-cli resources imported <path-to-vasset-project-root>
+  xmake run vasset-cli import resources imported <path-to-vasset-project-root>
   # example for Powershell on Windows
-  xmake run vasset-cli resources imported $pwd
+  xmake run vasset-cli import resources imported $pwd
+  ```
+
+  ```bash
+  xmake run vasset-cli pack <asset-root> <out.vpk>
+  # example
+  xmake run vasset-cli pack resources resources.vpk
   ```
 
 ## License

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "vasset/asset_error.hpp"
+
+#include <vbase/core/result.hpp>
 #include <vbase/core/string_view.hpp>
 #include <vbase/core/uuid.hpp>
 
@@ -130,12 +133,7 @@ namespace vasset
         }
     };
 
-    struct VTextureMeta
-    {
-        vbase::UUID uuid;
-        std::string extension; // original file extension
-    };
-
-    bool saveTexture(const VTexture& texture, vbase::StringView filePath, vbase::StringView srcFilePath);
-    bool loadTexture(vbase::StringView filePath, VTexture& outTexture);
+    vbase::Result<void, AssetError> saveTexture(const VTexture& texture, vbase::StringView filePath);
+    vbase::Result<void, AssetError> loadTexture(vbase::StringView filePath, VTexture& outTexture);
+    vbase::Result<void, AssetError> loadTextureFromMemory(const std::vector<std::byte>& data, VTexture& outTexture);
 } // namespace vasset
