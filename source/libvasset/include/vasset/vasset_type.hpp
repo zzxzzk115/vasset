@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vbase/core/string_view.hpp>
+
 #include <string>
 
 namespace vasset
@@ -25,6 +27,26 @@ namespace vasset
             case VAssetType::eUnknown:
             default:
                 return "unknown";
+        }
+    }
+
+    inline VAssetType fromString(vbase::StringView typeStr)
+    {
+        if (typeStr == "texture")
+        {
+            return VAssetType::eTexture;
+        }
+        else if (typeStr == "material")
+        {
+            return VAssetType::eMaterial;
+        }
+        else if (typeStr == "mesh")
+        {
+            return VAssetType::eMesh;
+        }
+        else
+        {
+            return VAssetType::eUnknown;
         }
     }
 } // namespace vasset

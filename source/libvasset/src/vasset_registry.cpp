@@ -1,76 +1,70 @@
 #include "vasset/vasset_registry.hpp"
 
-#include <nlohmann/json.hpp>
-
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
-namespace
-{
-    using json = nlohmann::json;
-    using namespace vasset;
-
-    VAssetType fromString(vbase::StringView str)
-    {
-        if (str == "texture")
-            return VAssetType::eTexture;
-        if (str == "material")
-            return VAssetType::eMaterial;
-        if (str == "mesh")
-            return VAssetType::eMesh;
-        return VAssetType::eUnknown;
-    }
-
-    void to_json(json& j, const VAssetRegistry::AssetEntry& e)
-    {
-        j = json {{"path", e.path}, {"type", toString(e.type)}};
-    }
-
-    void from_json(const json& j, VAssetRegistry::AssetEntry& e)
-    {
-        e.path = j.at("path").get<std::string>();
-        e.type = fromString(j.at("type").get<std::string>());
-    }
-} // namespace
-
 namespace vasset
 {
-    void VAssetRegistry::setImportedFolder(vbase::StringView folder) { m_ImportedFolder = folder; }
-
-    bool VAssetRegistry::registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type)
+    static inline void trim_inplace(std::string& s)
     {
-        m_Registry[vbase::to_string(uuid)] = {path.data(), type};
-        return true;
+        auto   is_ws = [](unsigned char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+        size_t a     = 0;
+        while (a < s.size() && is_ws(static_cast<unsigned char>(s[a])))
+            ++a;
+        size_t b = s.size();
+        while (b > a && is_ws(static_cast<unsigned char>(s[b - 1])))
+            --b;
+        if (a == 0 && b == s.size())
+            return;
+        s = s.substr(a, b - a);
     }
 
-    bool VAssetRegistry::updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath)
-    {
-        auto it = m_Registry.find(vbase::to_string(uuid));
-        if (it == m_Registry.end())
-        {
-            return false;
-        }
+    void VAssetRegistry::setAssetRootPath(vbase::StringView rootPath) { m_AssetRootPath = std::string(rootPath); }
+    void VAssetRegistry::setImportedFolderName(vbase::StringView name) { m_ImportedFolderName = std::string(name); }
 
-        it->second.path = newPath;
-        return true;
+    vbase::Result<void, AssetError>
+    VAssetRegistry::registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type)
+    {
+        if (!uuid.valid())
+            return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+
+        AssetEntry e;
+        e.path = std::string(path);
+        e.type = type;
+
+        m_Registry[vbase::to_string(uuid)] = std::move(e);
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    bool VAssetRegistry::unregisterAsset(const vbase::UUID& uuid)
+    vbase::Result<void, AssetError> VAssetRegistry::updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath)
     {
-        auto it = m_Registry.find(vbase::to_string(uuid));
+        auto key = vbase::to_string(uuid);
+        auto it  = m_Registry.find(key);
         if (it == m_Registry.end())
-        {
-            return false;
-        }
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
+
+        it->second.path = std::string(newPath);
+        return vbase::Result<void, AssetError>::ok();
+    }
+
+    vbase::Result<void, AssetError> VAssetRegistry::unregisterAsset(const vbase::UUID& uuid)
+    {
+        auto key = vbase::to_string(uuid);
+        auto it  = m_Registry.find(key);
+        if (it == m_Registry.end())
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
         m_Registry.erase(it);
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 
     VAssetRegistry::AssetEntry VAssetRegistry::lookup(const vbase::UUID& uuid) const
     {
         auto it = m_Registry.find(vbase::to_string(uuid));
-        return it != m_Registry.end() ? it->second : AssetEntry {};
+        if (it == m_Registry.end())
+            return AssetEntry {};
+        return it->second;
     }
 
     const std::unordered_map<std::string, VAssetRegistry::AssetEntry>& VAssetRegistry::getRegistry() const
@@ -78,91 +72,180 @@ namespace vasset
         return m_Registry;
     }
 
-    void VAssetRegistry::save(vbase::StringView filename) const
+    vbase::Result<void, AssetError> VAssetRegistry::save(vbase::StringView filename) const
     {
-        nlohmann::json j;
+        std::filesystem::path p(filename);
+        if (p.has_parent_path())
+            std::filesystem::create_directories(p.parent_path());
+
+        std::ofstream f(p, std::ios::binary);
+        if (!f)
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        f << "# vasset registry (tsv)\n";
+        f << "# uuid\ttype\tpath\n";
+
         for (const auto& [uuidStr, entry] : m_Registry)
         {
-            nlohmann::json jEntry;
-            to_json(jEntry, entry);
-            j[uuidStr] = jEntry;
+            f << uuidStr << "\t" << toString(entry.type) << "\t" << entry.path << "\n";
         }
-        std::ofstream out(filename);
-        out << j.dump(4);
+
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    void VAssetRegistry::load(vbase::StringView filename)
+    vbase::Result<void, AssetError> VAssetRegistry::load(vbase::StringView filename)
     {
-        std::ifstream in(filename);
-        if (!in.is_open())
-            return;
-        nlohmann::json j;
-        in >> j;
-        for (const auto& [uuidStr, jEntry] : j.items())
+        std::ifstream f(std::string(filename), std::ios::binary);
+        if (!f)
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
+
+        // read all lines
+        f.seekg(0, std::ios::end);
+        const size_t size = static_cast<size_t>(f.tellg());
+        f.seekg(0, std::ios::beg);
+
+        std::string file;
+        file.resize(size);
+        if (size > 0)
+            f.read(file.data(), size);
+
+        if (!f && size != 0)
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        m_Registry.clear();
+
+        // reserve
+        size_t lineCount = 0;
+        for (char c : file)
+            if (c == '\n')
+                ++lineCount;
+
+        m_Registry.reserve(lineCount);
+
+        const char* p   = file.data();
+        const char* end = p + file.size();
+
+        while (p < end)
         {
-            VAssetRegistry::AssetEntry entry;
-            from_json(jEntry, entry);
-            m_Registry[uuidStr] = entry;
+            // skip empty lines
+            if (*p == '\n' || *p == '\r')
+            {
+                ++p;
+                continue;
+            }
+
+            // skip comments
+            if (*p == '#')
+            {
+                while (p < end && *p != '\n')
+                    ++p;
+                continue;
+            }
+
+            // parse uuid
+            const char* uuidBegin = p;
+            while (p < end && *p != '\t' && *p != '\n')
+                ++p;
+
+            if (p >= end || *p != '\t')
+            {
+                while (p < end && *p != '\n')
+                    ++p;
+                continue;
+            }
+
+            vbase::StringView uuidView(uuidBegin, p - uuidBegin);
+            ++p; // skip '\t'
+
+            // parse type
+            const char* typeBegin = p;
+            while (p < end && *p != '\t' && *p != '\n')
+                ++p;
+
+            if (p >= end || *p != '\t')
+            {
+                while (p < end && *p != '\n')
+                    ++p;
+                continue;
+            }
+
+            vbase::StringView typeView(typeBegin, p - typeBegin);
+            ++p;
+
+            // parse path
+            const char* pathBegin = p;
+            while (p < end && *p != '\n')
+                ++p;
+
+            vbase::StringView pathView(pathBegin, p - pathBegin);
+
+            // skip new lines
+            if (p < end && *p == '\n')
+                ++p;
+
+            // create an entry
+            AssetEntry e;
+            e.type = fromString(typeView);
+            if (e.type == VAssetType::eUnknown)
+                continue;
+
+            e.path.assign(pathView.data(), pathView.size());
+
+            vbase::UUID id {};
+            if (!vbase::try_parse_uuid(std::string(uuidView).c_str(), id))
+                continue;
+
+            m_Registry[vbase::to_string(id)] = std::move(e);
         }
+
+        return vbase::Result<void, AssetError>::ok();
     }
 
     void VAssetRegistry::cleanup()
     {
-        // Traverse the registry and remove entries whose files do not exist
+        // Remove entries whose target file no longer exists.
         for (auto it = m_Registry.begin(); it != m_Registry.end();)
         {
-            std::string fullPath = m_ImportedFolder + "/" + it->second.path;
-            if (!std::filesystem::exists(fullPath))
-            {
-                std::cerr << "Removing missing asset from registry: " << fullPath << std::endl;
+            auto osPath = std::filesystem::path(m_AssetRootPath) / it->second.path;
+
+            if (!std::filesystem::exists(osPath))
                 it = m_Registry.erase(it);
-                std::filesystem::remove(fullPath);
-            }
             else
-            {
                 ++it;
-            }
+        }
+    }
+
+    std::string VAssetRegistry::getAssetRootPath() const { return m_AssetRootPath; }
+
+    std::string VAssetRegistry::getSourceAssetPath(vbase::StringView assetFullPath, bool relative) const
+    {
+        std::filesystem::path fullPath(assetFullPath);
+        std::filesystem::path assetRoot(m_AssetRootPath);
+
+        if (relative)
+        {
+            std::filesystem::path relativePath = std::filesystem::relative(fullPath, assetRoot);
+            return relativePath.string();
+        }
+        else
+        {
+            return fullPath.string();
         }
     }
 
     std::string VAssetRegistry::getImportedAssetPath(VAssetType type, vbase::StringView assetName, bool relative) const
     {
-        std::string path;
+        std::string folder = m_ImportedFolderName;
 
-        std::string finalAssetName;
-
-        if (assetName.empty())
-        {
-            // Use a random UUID as name to avoid collisions
-            finalAssetName = vbase::to_string(vbase::uuid_random());
-        }
-        else
-        {
-            finalAssetName = assetName;
-        }
-
-        switch (type)
-        {
-            case VAssetType::eTexture:
-                path = "textures/" + finalAssetName + ".vtex";
-                break;
-            case VAssetType::eMaterial:
-                path = "materials/" + finalAssetName + ".vmat";
-                break;
-            case VAssetType::eMesh:
-                path = "meshes/" + finalAssetName + ".vmesh";
-                break;
-            case VAssetType::eUnknown:
-            default:
-                path = "unknown/" + finalAssetName;
-                break;
-        }
+        std::string out = folder + "/" + toString(type) + "/" + std::string(assetName);
 
         if (!relative)
         {
-            path = m_ImportedFolder + "/" + path;
+            std::filesystem::path assetRoot(m_AssetRootPath);
+            std::filesystem::path fullPath = assetRoot / out;
+            return fullPath.string();
         }
 
-        return path;
+        return out;
     }
 } // namespace vasset

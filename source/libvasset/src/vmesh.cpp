@@ -1,6 +1,8 @@
 #include "vasset/vmesh.hpp"
+#include "vasset/asset_error.hpp"
 
-#include <nlohmann/json.hpp>
+#include <vbase/core/result.hpp>
+
 #include <zstd.h>
 
 #include <filesystem>
@@ -9,8 +11,6 @@
 
 namespace vasset
 {
-    constexpr const char* META_FILE_EXTENSION = ".vmeta";
-
     struct VMeshFileHeader
     {
         char     magic[16]; // "VMESH"
@@ -19,10 +19,7 @@ namespace vasset
         uint64_t rawSize;   // uncompressed size
     };
 
-    bool saveMesh(const VMesh&      mesh,
-                  vbase::StringView filePath,
-                  vbase::StringView srcFilePath,
-                  int               zstdLevel) // 0 = no compression
+    vbase::Result<void, AssetError> saveMesh(const VMesh& mesh, vbase::StringView filePath, int zstdLevel)
     {
         // ------------------------------------------------------------
         // Prepare output directory
@@ -171,9 +168,9 @@ namespace vasset
         // ------------------------------------------------------------
         // Write file
         // ------------------------------------------------------------
-        std::ofstream file(filePath, std::ios::binary);
+        std::ofstream file(std::string(filePath), std::ios::binary);
         if (!file)
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
         // -------- Write container header --------
         VMeshFileHeader header {};
@@ -200,7 +197,7 @@ namespace vasset
             if (ZSTD_isError(cSize))
             {
                 std::cerr << "zstd compress failed: " << ZSTD_getErrorName(cSize) << std::endl;
-                return false;
+                return vbase::Result<void, AssetError>::err(AssetError::eIOError);
             }
 
             file.write(reinterpret_cast<const char*>(comp.data()), cSize);
@@ -209,87 +206,112 @@ namespace vasset
         file.close();
 
         // ------------------------------------------------------------
-        // Save meta file as json by nlohmann_json
-        // ------------------------------------------------------------
-        auto srcFileOSPath  = std::filesystem::path(srcFilePath);
-        auto metaFileOSPath = srcFileOSPath;
-        metaFileOSPath.replace_extension(META_FILE_EXTENSION);
-
-        VMeshMeta meta {};
-        meta.uuid      = mesh.uuid;
-        meta.extension = srcFileOSPath.extension().string();
-
-        std::ofstream metaFile(metaFileOSPath);
-        if (!metaFile)
-            return false;
-
-        metaFile << nlohmann::json {
-            {"uuid", vbase::to_string(meta.uuid)},
-            {"extension", meta.extension},
-        };
-        metaFile.close();
-
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 
-    bool loadMesh(vbase::StringView filePath, VMesh& outMesh)
+    vbase::Result<void, AssetError> loadMesh(vbase::StringView filePath, VMesh& outMesh)
     {
-        // Binary reading
-        std::ifstream file(filePath, std::ios::binary);
-        if (!file)
-            return false;
+        struct FileGuard
+        {
+            std::ifstream file;
+            ~FileGuard()
+            {
+                if (file.is_open())
+                    file.close();
+            }
+        } fileGuard;
+
+        fileGuard.file = std::ifstream(std::string(filePath), std::ios::binary);
+        if (!fileGuard.file)
+            return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
+
+        std::streamsize size = fileGuard.file.tellg();
+        fileGuard.file.seekg(0, std::ios::beg);
+
+        if (size <= 0)
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        std::vector<std::byte> buffer(size);
+
+        if (!fileGuard.file.read(reinterpret_cast<char*>(buffer.data()), size))
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        return loadMeshFromMemory(buffer, outMesh);
+    }
+
+    vbase::Result<void, AssetError> loadMeshFromMemory(const std::vector<std::byte>& data, VMesh& outMesh)
+    {
+        if (data.size() < sizeof(VMeshFileHeader))
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
+        size_t offset = 0;
+
+        auto readSafe = [&](void* dst, size_t size) -> bool {
+            if (offset + size > data.size())
+                return false;
+
+            std::memcpy(dst, data.data() + offset, size);
+            offset += size;
+            return true;
+        };
 
         // ------------------------------------------------------------
         // Read container header
         // ------------------------------------------------------------
         VMeshFileHeader header {};
-        file.read(reinterpret_cast<char*>(&header), sizeof(header));
+        if (!readSafe(&header, sizeof(header)))
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         if (std::string(header.magic) != "VMESH")
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         bool compressed = (header.flags & 1u) != 0;
 
         // ------------------------------------------------------------
-        // Read payload (decompress if needed)
+        // Extract payload
         // ------------------------------------------------------------
         std::vector<uint8_t> raw;
 
         if (!compressed)
         {
+            if (offset + header.rawSize > data.size())
+                return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+
             raw.resize(header.rawSize);
-            file.read(reinterpret_cast<char*>(raw.data()), header.rawSize);
+            std::memcpy(raw.data(), data.data() + offset, header.rawSize);
         }
         else
         {
-            std::vector<uint8_t> comp(std::istreambuf_iterator<char>(file), {});
+            size_t      compSize = data.size() - offset;
+            const void* compData = data.data() + offset;
 
             raw.resize(header.rawSize);
 
-            size_t const dSize = ZSTD_decompress(raw.data(), raw.size(), comp.data(), comp.size());
+            size_t dSize = ZSTD_decompress(raw.data(), raw.size(), compData, compSize);
 
-            if (ZSTD_isError(dSize))
-            {
-                std::cerr << "zstd decompress failed: " << ZSTD_getErrorName(dSize) << std::endl;
-                return false;
-            }
+            if (ZSTD_isError(dSize) || dSize != header.rawSize)
+                return vbase::Result<void, AssetError>::err(AssetError::eIOError);
         }
 
         // ------------------------------------------------------------
-        // Parse original VMESH format from memory
+        // Now parse raw VMESH data
         // ------------------------------------------------------------
-        size_t offset = 0;
+        size_t rawOffset = 0;
 
-        auto readRaw = [&](void* dst, size_t size) {
-            memcpy(dst, raw.data() + offset, size);
-            offset += size;
+        auto readRaw = [&](void* dst, size_t size) -> bool {
+            if (rawOffset + size > raw.size())
+                return false;
+
+            std::memcpy(dst, raw.data() + rawOffset, size);
+            rawOffset += size;
+            return true;
         };
 
-        // 16 bytes for magic number
+        // 16 bytes magic
         char magic[16];
         readRaw(magic, sizeof(magic));
         if (std::string(magic) != "VMESH")
-            return false;
+            return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         // 16 bytes for UUID
         readRaw(&outMesh.uuid, sizeof(outMesh.uuid));
@@ -413,8 +435,6 @@ namespace vasset
         outMesh.name.resize(nameLength);
         readRaw(outMesh.name.data(), nameLength);
 
-        file.close();
-
-        return true;
+        return vbase::Result<void, AssetError>::ok();
     }
 } // namespace vasset

@@ -14,7 +14,7 @@ TEST(MaterialSerialization, BasicSerialization)
     material.pbrMR.metallicFactor   = 0.5f;
 
     // Serialize to binary
-    bool result = saveMaterial(material, "test_material.vmat");
+    auto result = saveMaterial(material, "test_material.vmat");
     ASSERT_TRUE(result);
 
     // Deserialize from binary
@@ -62,7 +62,7 @@ TEST(MeshSerialization, BasicSerialization)
     mesh.materials.push_back(matRef);
 
     // Serialize to binary
-    bool result = saveMesh(mesh, "test_mesh.vmesh", "test_mesh.vmeta");
+    auto result = saveMesh(mesh, "test_mesh.vmesh");
     ASSERT_TRUE(result);
 
     // Deserialize from binary
@@ -107,7 +107,7 @@ TEST(TextureSerialization, BasicSerialization)
     texture.data.resize(texture.width * texture.height * 4, 255);
 
     // Serialize to binary
-    bool result = saveTexture(texture, "test_texture.vtex", "test_texture.vmeta");
+    auto result = saveTexture(texture, "test_texture.vtex");
     ASSERT_TRUE(result);
 
     // Deserialize from binary
