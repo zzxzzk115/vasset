@@ -34,7 +34,7 @@ namespace vasset
     static inline bool is_vmesh_already_compressed(vbase::ConstByteSpan bytes)
     {
         // VMESH header: magic[16], version, flags, rawSize
-        // flags bit0 = compressed (as per your vmesh design)
+        // flags bit0 = compressed
         if (bytes.size() < 16 + 4 + 4 + 8)
             return false;
 
