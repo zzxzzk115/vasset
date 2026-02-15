@@ -64,7 +64,7 @@ static int cmd_pack(int argc, char** argv)
     std::string assetRoot = argv[1];
     std::string outVpk    = argv[2];
 
-    int zstdLevel = 3;
+    int zstdLevel = 6;
     for (int i = 3; i < argc; ++i)
     {
         std::string a = argv[i];
