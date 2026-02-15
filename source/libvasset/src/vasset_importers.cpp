@@ -427,7 +427,7 @@ namespace vasset
         // ======================== KTX2 ========================
         if (isKTX2(ext))
         {
-            std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+            std::ifstream file(std::string(filePath), std::ios::binary | std::ios::ate);
             if (!file)
                 return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
 
