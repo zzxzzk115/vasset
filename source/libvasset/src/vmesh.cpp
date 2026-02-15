@@ -211,29 +211,21 @@ namespace vasset
 
     vbase::Result<void, AssetError> loadMesh(vbase::StringView filePath, VMesh& outMesh)
     {
-        struct FileGuard
-        {
-            std::ifstream file;
-            ~FileGuard()
-            {
-                if (file.is_open())
-                    file.close();
-            }
-        } fileGuard;
+        std::filesystem::path path(filePath);
 
-        fileGuard.file = std::ifstream(std::string(filePath), std::ios::binary);
-        if (!fileGuard.file)
+        if (!std::filesystem::exists(path))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
-        std::streamsize size = fileGuard.file.tellg();
-        fileGuard.file.seekg(0, std::ios::beg);
-
-        if (size <= 0)
+        const auto size = std::filesystem::file_size(path);
+        if (size == 0)
             return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         std::vector<std::byte> buffer(size);
 
-        if (!fileGuard.file.read(reinterpret_cast<char*>(buffer.data()), size))
+        std::ifstream file(path, std::ios::binary);
+        file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(size));
+
+        if (!file)
             return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         return loadMeshFromMemory(buffer, outMesh);
