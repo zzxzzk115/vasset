@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vbase/core/scoped_enum_flags.hpp>
+
 #include <glm/glm.hpp>
 
 namespace vasset
@@ -20,6 +22,7 @@ namespace vasset
         eGeneral = ePosition | eNormal | eTexCoord0 | eTangent,
         eAll     = ePosition | eNormal | eColor | eTexCoord0 | eTexCoord1 | eTangent | eJointIndices | eJointWeights
     };
+
     inline VVertexFlags operator|(VVertexFlags a, VVertexFlags b)
     {
         return static_cast<VVertexFlags>(static_cast<int>(a) | static_cast<int>(b));
@@ -64,3 +67,7 @@ namespace vasset
         {}
     };
 } // namespace vasset
+
+template<>
+struct HasFlags<vasset::VVertexFlags> : std::true_type
+{};
