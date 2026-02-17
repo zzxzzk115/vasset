@@ -83,6 +83,8 @@ namespace vasset
             return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         f << "# vasset registry (tsv)\n";
+        f << "# asset_root\t" << m_AssetRootPath << "\n";
+        f << "# imported_folder\t" << m_ImportedFolderName << "\n";
         f << "# uuid\ttype\tpath\n";
 
         for (const auto& [uuidStr, entry] : m_Registry)
@@ -134,11 +136,39 @@ namespace vasset
                 continue;
             }
 
-            // skip comments
+            // parse comment / metadata
             if (*p == '#')
             {
+                ++p;
+
+                const char* lineBegin = p;
+
                 while (p < end && *p != '\n')
                     ++p;
+
+                vbase::StringView line(lineBegin, p - lineBegin);
+
+                // parse asset_root
+                {
+                    constexpr std::string_view key = " asset_root\t";
+                    if (line.substr(0, key.size()) == key)
+                    {
+                        m_AssetRootPath.assign(line.data() + key.size(), line.size() - key.size());
+                    }
+                }
+
+                // parse imported_folder
+                {
+                    constexpr std::string_view key = " imported_folder\t";
+                    if (line.substr(0, key.size()) == key)
+                    {
+                        m_ImportedFolderName.assign(line.data() + key.size(), line.size() - key.size());
+                    }
+                }
+
+                if (p < end && *p == '\n')
+                    ++p;
+
                 continue;
             }
 

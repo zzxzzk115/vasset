@@ -75,7 +75,7 @@ namespace vasset
 
         std::vector<VSubMesh> subMeshes;
 
-        std::vector<VMaterialRef> materials;
+        std::vector<VMaterial> materials;
 
         std::string name;
 

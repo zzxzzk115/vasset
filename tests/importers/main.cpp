@@ -65,6 +65,13 @@ int main()
                                       << meshlet.center.z << "), radius " << meshlet.radius << std::endl;
                         }
                     }
+
+                    // Material info
+                    if (subMesh.materialIndex >= 0 && subMesh.materialIndex < static_cast<int>(reg.size()))
+                    {
+                        const auto& material = mesh.materials[subMesh.materialIndex];
+                        std::cout << "  Material: " << material.name << std::endl;
+                    }
                 }
             }
         }

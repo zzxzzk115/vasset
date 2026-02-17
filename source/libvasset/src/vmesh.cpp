@@ -156,8 +156,67 @@ namespace vasset
         // N materials
         for (const auto& material : mesh.materials)
         {
-            // 16 bytes for material UUID
-            writeRaw(&material.uuid, sizeof(material.uuid));
+            // 4 bytes for material type
+            writeRaw(&material.type, sizeof(material.type));
+
+            // Serialize PBRMetallicRoughness properties
+            // Base Color
+            writeRaw(&material.pbrMR.baseColor, sizeof(material.pbrMR.baseColor));
+
+            // Alpha Cutoff
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.alphaCutoff), sizeof(material.pbrMR.alphaCutoff));
+
+            // Alpha Mode
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.alphaMode), sizeof(material.pbrMR.alphaMode));
+
+            // Opacity
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.opacity), sizeof(material.pbrMR.opacity));
+
+            // Blend Mode
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.blendMode), sizeof(material.pbrMR.blendMode));
+
+            // Metallic Factor
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.metallicFactor),
+                     sizeof(material.pbrMR.metallicFactor));
+
+            // Roughness Factor
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.roughnessFactor),
+                     sizeof(material.pbrMR.roughnessFactor));
+
+            // Emissive Color Intensity
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.emissiveColorIntensity),
+                     sizeof(material.pbrMR.emissiveColorIntensity));
+
+            // Ambient Color
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.ambientColor), sizeof(material.pbrMR.ambientColor));
+
+            // IOR
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.ior), sizeof(material.pbrMR.ior));
+
+            // Double Sided
+            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.doubleSided), sizeof(material.pbrMR.doubleSided));
+
+            // 4 bytes for name length
+            uint32_t nameLength = static_cast<uint32_t>(material.name.size());
+            writeRaw(reinterpret_cast<const char*>(&nameLength), sizeof(nameLength));
+
+            // Name string
+            writeRaw(material.name.c_str(), nameLength);
+
+            // Texture Refs
+            auto writeTextureRef = [&](const VTextureRef& texRef) {
+                writeRaw(reinterpret_cast<const char*>(&texRef.uuid), sizeof(texRef.uuid));
+            };
+
+            writeTextureRef(material.pbrMR.baseColorTexture);
+            writeTextureRef(material.pbrMR.alphaTexture);
+            writeTextureRef(material.pbrMR.metallicTexture);
+            writeTextureRef(material.pbrMR.roughnessTexture);
+            writeTextureRef(material.pbrMR.specularTexture);
+            writeTextureRef(material.pbrMR.normalTexture);
+            writeTextureRef(material.pbrMR.ambientOcclusionTexture);
+            writeTextureRef(material.pbrMR.emissiveTexture);
+            writeTextureRef(material.pbrMR.metallicRoughnessTexture);
         }
 
         // name
@@ -417,7 +476,66 @@ namespace vasset
 
         for (auto& material : outMesh.materials)
         {
-            readRaw(&material.uuid, sizeof(material.uuid));
+            // 4 bytes for material type
+            readRaw(reinterpret_cast<char*>(&material.type), sizeof(material.type));
+
+            // Deserialize PBRMetallicRoughness properties
+            // Base Color
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.baseColor), sizeof(material.pbrMR.baseColor));
+
+            // Alpha Cutoff
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.alphaCutoff), sizeof(material.pbrMR.alphaCutoff));
+
+            // Alpha Mode
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.alphaMode), sizeof(material.pbrMR.alphaMode));
+
+            // Opacity
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.opacity), sizeof(material.pbrMR.opacity));
+
+            // Blend Mode
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.blendMode), sizeof(material.pbrMR.blendMode));
+
+            // Metallic Factor
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.metallicFactor), sizeof(material.pbrMR.metallicFactor));
+
+            // Roughness Factor
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.roughnessFactor), sizeof(material.pbrMR.roughnessFactor));
+
+            // Emissive Color Intensity
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.emissiveColorIntensity),
+                    sizeof(material.pbrMR.emissiveColorIntensity));
+
+            // Ambient Color
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.ambientColor), sizeof(material.pbrMR.ambientColor));
+
+            // IOR
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.ior), sizeof(material.pbrMR.ior));
+
+            // Double Sided
+            readRaw(reinterpret_cast<char*>(&material.pbrMR.doubleSided), sizeof(material.pbrMR.doubleSided));
+
+            // 4 bytes for name length
+            uint32_t nameLength = 0;
+            readRaw(reinterpret_cast<char*>(&nameLength), sizeof(nameLength));
+
+            // Name string
+            material.name.resize(nameLength);
+            readRaw(&material.name[0], nameLength);
+
+            // Texture Refs
+            auto readTextureRef = [&](VTextureRef& texRef) {
+                readRaw(reinterpret_cast<char*>(&texRef.uuid), sizeof(texRef.uuid));
+            };
+
+            readTextureRef(material.pbrMR.baseColorTexture);
+            readTextureRef(material.pbrMR.alphaTexture);
+            readTextureRef(material.pbrMR.metallicTexture);
+            readTextureRef(material.pbrMR.roughnessTexture);
+            readTextureRef(material.pbrMR.specularTexture);
+            readTextureRef(material.pbrMR.normalTexture);
+            readTextureRef(material.pbrMR.ambientOcclusionTexture);
+            readTextureRef(material.pbrMR.emissiveTexture);
+            readTextureRef(material.pbrMR.metallicRoughnessTexture);
         }
 
         // mesh name

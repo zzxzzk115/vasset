@@ -10,13 +10,12 @@
 
 namespace vasset
 {
-    static constexpr uint32_t VPK_VERSION = 1;
+    static constexpr uint32_t VPK_VERSION = 2;
 
     static inline uint64_t hash64(std::string_view s) { return XXH3_64bits(s.data(), s.size()); }
 
     static inline bool is_already_compressed_path(std::string_view path)
     {
-        // Common already-compressed formats.
         auto lower = std::string(path);
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
             return static_cast<char>(std::tolower(c));
@@ -33,8 +32,6 @@ namespace vasset
 
     static inline bool is_vmesh_already_compressed(vbase::ConstByteSpan bytes)
     {
-        // VMESH header: magic[16], version, flags, rawSize
-        // flags bit0 = compressed
         if (bytes.size() < 16 + 4 + 4 + 8)
             return false;
 
@@ -47,6 +44,19 @@ namespace vasset
         return (flags & 0x1u) != 0;
     }
 
+    struct VpkHeaderV1
+    {
+        char     magic[4];
+        uint32_t version;
+        uint32_t flags;
+        uint32_t fileCount;
+        uint64_t indexOffset;
+        uint64_t indexSize;
+        uint64_t stringOffset;
+        uint64_t stringSize;
+        uint64_t dataOffset;
+    };
+
     vbase::Result<VpkReadOnly, AssetError> openVpk(vbase::StringView vpkPath)
     {
         std::ifstream f(std::string(vpkPath), std::ios::binary);
@@ -55,13 +65,53 @@ namespace vasset
 
         VpkReadOnly out {};
 
-        f.read(reinterpret_cast<char*>(&out.header), sizeof(VpkHeader));
+        // Read header version first
+        char     magic[4] = {};
+        uint32_t version  = 0;
+
+        f.read(magic, 4);
+        f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
         if (!f)
             return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
 
-        if (std::memcmp(out.header.magic, "VPK\0", 4) != 0 || out.header.version != VPK_VERSION)
+        if (std::memcmp(magic, "VPK\0", 4) != 0)
             return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
 
+        f.seekg(0, std::ios::beg);
+
+        if (version == 1)
+        {
+            VpkHeaderV1 h1 {};
+            f.read(reinterpret_cast<char*>(&h1), sizeof(VpkHeaderV1));
+            if (!f)
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+            std::memcpy(out.header.magic, h1.magic, 4);
+            out.header.version      = h1.version;
+            out.header.flags        = h1.flags;
+            out.header.fileCount    = h1.fileCount;
+            out.header.indexOffset  = h1.indexOffset;
+            out.header.indexSize    = h1.indexSize;
+            out.header.stringOffset = h1.stringOffset;
+            out.header.stringSize   = h1.stringSize;
+            out.header.dataOffset   = h1.dataOffset;
+
+            out.header.registryOffset = 0;
+            out.header.registrySize   = 0;
+            out.header.registryCount  = 0;
+        }
+        else if (version == VPK_VERSION)
+        {
+            f.read(reinterpret_cast<char*>(&out.header), sizeof(VpkHeader));
+            if (!f)
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+        }
+        else
+        {
+            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+        }
+
+        // Read index
         out.entries.resize(out.header.fileCount);
 
         f.seekg(static_cast<std::streamoff>(out.header.indexOffset), std::ios::beg);
@@ -69,11 +119,22 @@ namespace vasset
         if (!f)
             return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
 
+        // Read string table
         out.stringTable.resize(static_cast<size_t>(out.header.stringSize));
         f.seekg(static_cast<std::streamoff>(out.header.stringOffset), std::ios::beg);
         f.read(out.stringTable.data(), static_cast<std::streamsize>(out.header.stringSize));
         if (!f)
             return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+        // Read registry (v2+)
+        if (out.header.registryCount > 0 && out.header.registrySize > 0)
+        {
+            out.registry.resize(static_cast<size_t>(out.header.registryCount));
+            f.seekg(static_cast<std::streamoff>(out.header.registryOffset), std::ios::beg);
+            f.read(reinterpret_cast<char*>(out.registry.data()), static_cast<std::streamsize>(out.header.registrySize));
+            if (!f)
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+        }
 
         // Build buckets
         for (uint32_t i = 0; i < static_cast<uint32_t>(out.entries.size()); ++i)
@@ -106,7 +167,6 @@ namespace vasset
     vbase::Result<std::vector<std::byte>, AssetError>
     readVpkFile(const VpkReadOnly& vpk, vbase::StringView vpkPath, vbase::StringView logicalPath)
     {
-        // Remove the first '/' if present, since logical paths in VPK are stored without a leading slash.
         if (!logicalPath.empty() && logicalPath.front() == '/')
             logicalPath.remove_prefix(1);
 
@@ -158,26 +218,29 @@ namespace vasset
         if (!f)
             return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
-        // Build string table
+        // String table
         std::string strtab;
         strtab.reserve(1024);
 
         std::vector<VpkEntry> entries;
         entries.reserve(items.size());
 
-        // We'll write data first after reserving header space.
+        std::vector<VpkAssetRegistryEntry> registry;
+        registry.reserve(items.size());
+
+        // Header placeholder
         VpkHeader hdr {};
         std::memcpy(hdr.magic, "VPK\0", 4);
         hdr.version   = VPK_VERSION;
         hdr.flags     = 0;
         hdr.fileCount = static_cast<uint32_t>(items.size());
 
-        f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr)); // placeholder
+        f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 
-        // Data blob starts right after header.
         hdr.dataOffset   = sizeof(hdr);
         uint64_t curData = hdr.dataOffset;
 
+        // Data blob
         for (const auto& it : items)
         {
             VpkEntry e {};
@@ -188,9 +251,15 @@ namespace vasset
             strtab.append(it.logicalPath.data(), it.logicalPath.size());
             strtab.push_back('\0');
 
-            vbase::ConstByteSpan bytes {it.bytes.data(), it.bytes.size()};
-            const bool already = is_already_compressed_path(it.logicalPath) || is_vmesh_already_compressed(bytes);
+            // Registry entry: UUID -> (string table path)
+            VpkAssetRegistryEntry r {};
+            r.uuid       = it.uuid;
+            r.pathOffset = e.pathOffset;
+            r.pathSize   = e.pathSize;
+            registry.push_back(r);
 
+            vbase::ConstByteSpan bytes {it.bytes.data(), it.bytes.size()};
+            const bool already    = is_already_compressed_path(it.logicalPath) || is_vmesh_already_compressed(bytes);
             const bool doCompress = it.allowCompress && !already && !it.bytes.empty();
 
             std::vector<std::byte> packed;
@@ -235,7 +304,7 @@ namespace vasset
             entries.push_back(e);
         }
 
-        // Write string table
+        // String table
         hdr.stringOffset = curData;
         hdr.stringSize   = static_cast<uint64_t>(strtab.size());
         if (!strtab.empty())
@@ -244,13 +313,23 @@ namespace vasset
             curData += static_cast<uint64_t>(strtab.size());
         }
 
-        // Write index
+        // Index
         hdr.indexOffset = curData;
         hdr.indexSize   = static_cast<uint32_t>(entries.size() * sizeof(VpkEntry));
         if (!entries.empty())
         {
             f.write(reinterpret_cast<const char*>(entries.data()), static_cast<std::streamsize>(hdr.indexSize));
             curData += hdr.indexSize;
+        }
+
+        // Registry
+        hdr.registryOffset = curData;
+        hdr.registrySize   = static_cast<uint32_t>(registry.size() * sizeof(VpkAssetRegistryEntry));
+        hdr.registryCount  = static_cast<uint32_t>(registry.size());
+        if (!registry.empty())
+        {
+            f.write(reinterpret_cast<const char*>(registry.data()), static_cast<std::streamsize>(hdr.registrySize));
+            curData += hdr.registrySize;
         }
 
         // Patch header

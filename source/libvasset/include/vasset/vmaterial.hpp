@@ -1,6 +1,5 @@
 #pragma once
 
-#include "vasset/asset_error.hpp"
 #include "vasset/vtexture.hpp"
 
 #include <vbase/core/result.hpp>
@@ -32,11 +31,6 @@ namespace vasset
         eAlpha,
         eAdditive,
         eMultiply
-    };
-
-    struct VMaterialRef
-    {
-        vbase::UUID uuid;
     };
 
     struct VMaterialPBRMetallicRoughness
@@ -77,12 +71,8 @@ namespace vasset
 
     struct VMaterial
     {
-        vbase::UUID                   uuid;
         VMaterialType                 type {VMaterialType::ePBRMetallicRoughness};
         VMaterialPBRMetallicRoughness pbrMR;
         std::string                   name;
     };
-
-    vbase::Result<void, AssetError> saveMaterial(const VMaterial& material, vbase::StringView filePath);
-    vbase::Result<void, AssetError> loadMaterial(vbase::StringView filePath, VMaterial& outMaterial);
 } // namespace vasset
