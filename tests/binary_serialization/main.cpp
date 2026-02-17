@@ -4,32 +4,6 @@
 
 using namespace vasset;
 
-TEST(MaterialSerialization, BasicSerialization)
-{
-    VMaterial material {};
-    material.name                   = "Test Material";
-    material.type                   = VMaterialType::ePBRMetallicRoughness;
-    material.pbrMR.baseColor        = {1.0f, 0.0f, 0.0f, 1.0f};           // Red color
-    material.pbrMR.baseColorTexture = VTextureRef {vbase::uuid_random()}; // Dummy texture reference
-    material.pbrMR.metallicFactor   = 0.5f;
-
-    // Serialize to binary
-    auto result = saveMaterial(material, "test_material.vmat");
-    ASSERT_TRUE(result);
-
-    // Deserialize from binary
-    VMaterial loadedMaterial {};
-    result = loadMaterial("test_material.vmat", loadedMaterial);
-    ASSERT_TRUE(result);
-
-    // Verify the loaded material
-    ASSERT_EQ(loadedMaterial.name, material.name);
-    ASSERT_EQ(loadedMaterial.type, material.type);
-    ASSERT_EQ(loadedMaterial.pbrMR.baseColor, material.pbrMR.baseColor);
-    ASSERT_EQ(loadedMaterial.pbrMR.baseColorTexture.uuid, material.pbrMR.baseColorTexture.uuid);
-    ASSERT_EQ(loadedMaterial.pbrMR.metallicFactor, material.pbrMR.metallicFactor);
-}
-
 TEST(MeshSerialization, BasicSerialization)
 {
     VMesh mesh {};
@@ -56,10 +30,10 @@ TEST(MeshSerialization, BasicSerialization)
 
     mesh.subMeshes.push_back(subMesh);
 
-    // Define a material reference
-    VMaterialRef matRef {};
-    matRef.uuid = vbase::uuid_random(); // Dummy material UUID
-    mesh.materials.push_back(matRef);
+    // Define a material
+    VMaterial mat {};
+    mat.name = "test_material";
+    mesh.materials.push_back(mat);
 
     // Serialize to binary
     auto result = saveMesh(mesh, "test_mesh.vmesh");
@@ -88,10 +62,6 @@ TEST(MeshSerialization, BasicSerialization)
         ASSERT_EQ(loadedMesh.subMeshes[i].materialIndex, mesh.subMeshes[i].materialIndex);
     }
     ASSERT_EQ(loadedMesh.materials.size(), mesh.materials.size());
-    for (size_t i = 0; i < mesh.materials.size(); ++i)
-    {
-        ASSERT_EQ(loadedMesh.materials[i].uuid, mesh.materials[i].uuid);
-    }
 }
 
 TEST(TextureSerialization, BasicSerialization)

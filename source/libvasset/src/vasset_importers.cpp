@@ -872,42 +872,9 @@ namespace vasset
                 materialName = std::format("{}_{}", outMesh.sourceFileName, materialName);
             }
 
-            const std::string relativeImportedPath =
-                m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, true);
-
-            auto uuid  = vbase::uuid_from_string_key(relativeImportedPath);
-            auto entry = m_Registry.lookup(uuid);
-            if (entry.type != VAssetType::eUnknown)
-            {
-                // Use existing material
-                std::cout << "Material already imported: " << entry.path << std::endl;
-                outMesh.materials.push_back(VMaterialRef {uuid});
-            }
-            else
-            {
-                VMaterial vMat {};
-
-                vMat.uuid = uuid;
-
-                processMaterial(aiMat, vMat);
-
-                const std::string importedPath =
-                    m_Registry.getImportedAssetPath(VAssetType::eMaterial, materialName, false);
-
-                auto sm = saveMaterial(vMat, importedPath);
-                if (!sm)
-                {
-                    std::cerr << "Failed to save material: " << importedPath << std::endl;
-                }
-
-                auto rr = m_Registry.registerAsset(vMat.uuid, relativeImportedPath, VAssetType::eMaterial);
-                if (!rr)
-                {
-                    std::cerr << "Failed to register asset: " << relativeImportedPath << std::endl;
-                }
-
-                outMesh.materials.push_back(VMaterialRef {vMat.uuid});
-            }
+            VMaterial vMat {};
+            processMaterial(aiMat, vMat);
+            outMesh.materials.push_back(vMat);
         }
 
         outMesh.subMeshes.push_back(subMesh);

@@ -8,6 +8,7 @@
 #include <vbase/core/result.hpp>
 #include <vbase/core/span.hpp>
 #include <vbase/core/string_view.hpp>
+#include <vbase/core/uuid.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -24,18 +25,26 @@ namespace vasset
     // - Data is typically the cooked asset bytes (e.g. .vtex / .vmesh).
     // - Per-entry compression is supported. Already-compressed assets should be stored uncompressed.
     //
-    // File layout (v1):
-    // [Header][Index][StringTable][DataBlob]
+    // File layout (v2):
+    // [Header][Index][StringTable][AssetRegistry][DataBlob]
     struct VpkHeader
     {
         char     magic[4]; // "VPK\0"
-        uint32_t version;  // 1
+        uint32_t version;  // 2
         uint32_t flags;    // reserved
         uint32_t fileCount;
+
         uint64_t indexOffset;
         uint64_t indexSize;
+
         uint64_t stringOffset;
         uint64_t stringSize;
+
+        uint64_t registryOffset;
+        uint64_t registrySize;
+        uint32_t registryCount;
+        uint32_t paddingU0;
+
         uint64_t dataOffset;
     };
 
@@ -43,6 +52,13 @@ namespace vasset
     {
         eNone = 0,
         eZstd = 1,
+    };
+
+    struct VpkAssetRegistryEntry
+    {
+        vbase::UUID uuid;
+        uint32_t    pathOffset = 0;
+        uint32_t    pathSize   = 0;
     };
 
     struct VpkEntry
@@ -59,6 +75,7 @@ namespace vasset
     struct VpkReadOnly
     {
         VpkHeader                                           header {};
+        std::vector<VpkAssetRegistryEntry>                  registry;
         std::vector<VpkEntry>                               entries;
         std::string                                         stringTable;
         std::unordered_map<uint64_t, std::vector<uint32_t>> buckets; // hash -> entry indices
@@ -74,6 +91,7 @@ namespace vasset
     // Writer input: already-prepared cooked bytes for each logical path.
     struct VpkWriteItem
     {
+        vbase::UUID            uuid {};
         std::string            logicalPath;
         std::vector<std::byte> bytes;
         bool                   allowCompress = true;
@@ -97,6 +115,8 @@ namespace vasset
 
         vbase::Result<std::unique_ptr<vfilesystem::IFile>, vfilesystem::FsError>
         open(vbase::StringView p, vfilesystem::FileMode mode) override;
+
+        const VpkReadOnly& getVpk() const { return m_Pkg; }
 
     private:
         std::string m_Path;

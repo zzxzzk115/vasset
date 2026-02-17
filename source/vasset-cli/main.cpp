@@ -127,8 +127,10 @@ static int cmd_pack(int argc, char** argv)
 
         VpkWriteItem it;
         it.logicalPath   = vi.value().source;
+        it.uuid          = vi.value().uid; // Preserve UUID from VImport
         it.bytes         = std::move(data);
         it.allowCompress = true;
+
         items.push_back(std::move(it));
     }
 
