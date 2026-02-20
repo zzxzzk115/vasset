@@ -1,6 +1,6 @@
 #pragma once
 
-#include <vfilesystem/interfaces/ifilesystem.hpp>
+#include "vfilesystem/backends/physical_filesystem.hpp"
 
 #include <vbase/core/result.hpp>
 #include <vbase/core/string_view.hpp>
@@ -21,7 +21,7 @@ namespace vasset
     class EditorRemapFileSystem final : public vfilesystem::IFileSystem
     {
     public:
-        explicit EditorRemapFileSystem(std::shared_ptr<vfilesystem::IFileSystem> base);
+        explicit EditorRemapFileSystem(std::shared_ptr<vfilesystem::PhysicalFileSystem> physicalFS);
 
         bool exists(vbase::StringView p) const override;
         bool isFile(vbase::StringView p) const override;
@@ -31,7 +31,7 @@ namespace vasset
         open(vbase::StringView p, vfilesystem::FileMode mode) override;
 
     private:
-        std::shared_ptr<vfilesystem::IFileSystem> m_Base;
+        std::shared_ptr<vfilesystem::PhysicalFileSystem> m_PhysicalFS;
     };
 
 } // namespace vasset

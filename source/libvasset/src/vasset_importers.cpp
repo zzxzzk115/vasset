@@ -364,11 +364,11 @@ namespace vasset
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
 
-        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(filePath));
+        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(relativeImportedPath));
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing texture
-            std::cout << "Texture already imported: " << entry.path << std::endl;
+            std::cout << "Texture already imported: " << entry.sourcePath << std::endl;
             return vbase::Result<void, AssetError>::ok();
         }
 
@@ -647,7 +647,8 @@ namespace vasset
         if (!sr_import)
             return vbase::Result<void, AssetError>::err(sr_import.error());
 
-        auto rr = m_Registry.registerAsset(outTexture.uuid, relativeImportedPath, VAssetType::eTexture);
+        auto rr =
+            m_Registry.registerAsset(outTexture.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eTexture);
         if (!rr)
             return vbase::Result<void, AssetError>::err(rr.error());
         return vbase::Result<void, AssetError>::ok();
@@ -677,7 +678,7 @@ namespace vasset
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing mesh
-            std::cout << "Mesh already imported: " << entry.path << std::endl;
+            std::cout << "Mesh already imported: " << entry.sourcePath << std::endl;
             return vbase::Result<void, AssetError>::ok();
         }
 
@@ -744,7 +745,7 @@ namespace vasset
         if (!sr_import)
             return vbase::Result<void, AssetError>::err(sr_import.error());
 
-        auto rr = m_Registry.registerAsset(outMesh.uuid, relativeImportedPath, VAssetType::eMesh);
+        auto rr = m_Registry.registerAsset(outMesh.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eMesh);
         if (!rr)
             return vbase::Result<void, AssetError>::err(rr.error());
         return vbase::Result<void, AssetError>::ok();

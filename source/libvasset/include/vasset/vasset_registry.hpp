@@ -17,20 +17,25 @@ namespace vasset
     public:
         struct AssetEntry
         {
-            std::string path;
+            std::string sourcePath;   // relative to asset root, e.g. "models/house.fbx"
+            std::string importedPath; // relative to asset root, e.g. "imported/models/house"
             VAssetType  type {VAssetType::eUnknown};
 
             std::string toString() const
             {
-                return "AssetEntry { path: " + path + ", type: " + vasset::toString(type) + " }";
+                return "AssetEntry { sourcePath: " + sourcePath + ", importedPath: " + importedPath +
+                       ", type: " + vasset::toString(type) + " }";
             }
         };
 
         void setAssetRootPath(vbase::StringView rootPath);
         void setImportedFolderName(vbase::StringView name);
 
-        vbase::Result<void, AssetError> registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type);
-        vbase::Result<void, AssetError> updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath);
+        vbase::Result<void, AssetError> registerAsset(const vbase::UUID& uuid,
+                                                      vbase::StringView  sourcePath,
+                                                      vbase::StringView  importedPath,
+                                                      VAssetType         type);
+        vbase::Result<void, AssetError> updateRegistry(const vbase::UUID& uuid, vbase::StringView newImportedPath);
         vbase::Result<void, AssetError> unregisterAsset(const vbase::UUID& uuid);
 
         AssetEntry lookup(const vbase::UUID& uuid) const;

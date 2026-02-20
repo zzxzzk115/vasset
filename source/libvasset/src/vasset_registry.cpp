@@ -23,28 +23,32 @@ namespace vasset
     void VAssetRegistry::setAssetRootPath(vbase::StringView rootPath) { m_AssetRootPath = std::string(rootPath); }
     void VAssetRegistry::setImportedFolderName(vbase::StringView name) { m_ImportedFolderName = std::string(name); }
 
-    vbase::Result<void, AssetError>
-    VAssetRegistry::registerAsset(const vbase::UUID& uuid, vbase::StringView path, VAssetType type)
+    vbase::Result<void, AssetError> VAssetRegistry::registerAsset(const vbase::UUID& uuid,
+                                                                  vbase::StringView  sourcePath,
+                                                                  vbase::StringView  importedPath,
+                                                                  VAssetType         type)
     {
         if (!uuid.valid())
             return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
 
         AssetEntry e;
-        e.path = std::string(path);
-        e.type = type;
+        e.sourcePath   = std::string(sourcePath);
+        e.importedPath = std::string(importedPath);
+        e.type         = type;
 
         m_Registry[vbase::to_string(uuid)] = std::move(e);
         return vbase::Result<void, AssetError>::ok();
     }
 
-    vbase::Result<void, AssetError> VAssetRegistry::updateRegistry(const vbase::UUID& uuid, vbase::StringView newPath)
+    vbase::Result<void, AssetError> VAssetRegistry::updateRegistry(const vbase::UUID& uuid,
+                                                                   vbase::StringView  newImportedPath)
     {
         auto key = vbase::to_string(uuid);
         auto it  = m_Registry.find(key);
         if (it == m_Registry.end())
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
-        it->second.path = std::string(newPath);
+        it->second.importedPath = std::string(newImportedPath);
         return vbase::Result<void, AssetError>::ok();
     }
 
@@ -85,11 +89,12 @@ namespace vasset
         f << "# vasset registry (tsv)\n";
         f << "# asset_root\t" << m_AssetRootPath << "\n";
         f << "# imported_folder\t" << m_ImportedFolderName << "\n";
-        f << "# uuid\ttype\tpath\n";
+        f << "# uuid\ttype\tsource_path\timported_path\n";
 
         for (const auto& [uuidStr, entry] : m_Registry)
         {
-            f << uuidStr << "\t" << toString(entry.type) << "\t" << entry.path << "\n";
+            f << uuidStr << "\t" << toString(entry.type) << "\t" << entry.sourcePath << "\t" << entry.importedPath
+              << "\n";
         }
 
         return vbase::Result<void, AssetError>::ok();
@@ -202,12 +207,26 @@ namespace vasset
             vbase::StringView typeView(typeBegin, p - typeBegin);
             ++p;
 
-            // parse path
-            const char* pathBegin = p;
+            // parse source path
+            const char* sourcePathBegin = p;
+            while (p < end && *p != '\t' && *p != '\n')
+                ++p;
+
+            vbase::StringView sourcePathView(sourcePathBegin, p - sourcePathBegin);
+            if (p >= end || *p != '\t')
+            {
+                while (p < end && *p != '\n')
+                    ++p;
+                continue;
+            }
+            ++p;
+
+            // parse imported path
+            const char* importedPathBegin = p;
             while (p < end && *p != '\n')
                 ++p;
 
-            vbase::StringView pathView(pathBegin, p - pathBegin);
+            vbase::StringView importedPathView(importedPathBegin, p - importedPathBegin);
 
             // skip new lines
             if (p < end && *p == '\n')
@@ -219,7 +238,8 @@ namespace vasset
             if (e.type == VAssetType::eUnknown)
                 continue;
 
-            e.path.assign(pathView.data(), pathView.size());
+            e.sourcePath.assign(sourcePathView.data(), sourcePathView.size());
+            e.importedPath.assign(importedPathView.data(), importedPathView.size());
 
             vbase::UUID id {};
             if (!vbase::try_parse_uuid(std::string(uuidView).c_str(), id))
@@ -236,7 +256,7 @@ namespace vasset
         // Remove entries whose target file no longer exists.
         for (auto it = m_Registry.begin(); it != m_Registry.end();)
         {
-            auto osPath = std::filesystem::path(m_AssetRootPath) / it->second.path;
+            auto osPath = std::filesystem::path(m_AssetRootPath) / it->second.importedPath;
 
             if (!std::filesystem::exists(osPath))
                 it = m_Registry.erase(it);
