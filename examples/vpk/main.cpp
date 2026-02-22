@@ -51,7 +51,7 @@ int main()
     {
         std::cout << "  Material: " << material.name << std::endl;
 
-        auto baseColorTexRef = material.pbrMR.baseColorTexture;
+        auto baseColorTexRef = material.core.pbrMR.baseColorTexture;
         if (baseColorTexRef.uuid.valid())
         {
             std::string baseColorTexPath;

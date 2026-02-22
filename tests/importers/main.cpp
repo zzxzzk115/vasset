@@ -42,7 +42,7 @@ int main()
     {
         if (entry.type == VAssetType::eMesh)
         {
-            std::string meshPath = loadedRegistry.getAssetRootPath() + "/" + entry.path;
+            std::string meshPath = loadedRegistry.getAssetRootPath() + "/" + entry.importedPath;
             VMesh       mesh {};
             if (loadMesh(meshPath, mesh))
             {

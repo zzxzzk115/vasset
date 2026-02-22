@@ -154,72 +154,127 @@ namespace vasset
         writeRaw(&materialCount, sizeof(materialCount));
 
         // N materials
+        auto writeString = [&](const std::string& str) {
+            uint32_t len = static_cast<uint32_t>(str.size());
+            writeRaw(&len, sizeof(len));
+            if (len)
+                writeRaw(str.data(), len);
+        };
+        auto writeTextureRef = [&](const VTextureRef& texRef) {
+            writeRaw(reinterpret_cast<const char*>(&texRef.uuid), sizeof(texRef.uuid));
+        };
+        auto writeBytes = [&](const std::vector<uint8_t>& bytes) {
+            uint32_t sz = static_cast<uint32_t>(bytes.size());
+            writeRaw(&sz, sizeof(sz));
+            if (sz)
+                writeRaw(bytes.data(), sz);
+        };
+
         for (const auto& material : mesh.materials)
         {
-            // 4 bytes for material type
-            writeRaw(&material.type, sizeof(material.type));
+            // 1 byte model
+            writeRaw(&material.model, sizeof(material.model));
 
-            // Serialize PBRMetallicRoughness properties
-            // Base Color
-            writeRaw(&material.pbrMR.baseColor, sizeof(material.pbrMR.baseColor));
+            // 4 bytes features
+            writeRaw(&material.features, sizeof(material.features));
 
-            // Alpha Cutoff
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.alphaCutoff), sizeof(material.pbrMR.alphaCutoff));
+            // name
+            writeString(material.name);
 
-            // Alpha Mode
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.alphaMode), sizeof(material.pbrMR.alphaMode));
+            // ---- core payload (by model) ----
+            switch (material.model)
+            {
+                case VMaterialModel::eUnlit: {
+                    writeRaw(&material.core.unlit.color, sizeof(material.core.unlit.color));
+                    writeTextureRef(material.core.unlit.colorTexture);
+                    break;
+                }
+                case VMaterialModel::ePBRSpecularGlossiness: {
+                    writeRaw(&material.core.pbrSG.diffuseFactor, sizeof(material.core.pbrSG.diffuseFactor));
+                    writeRaw(&material.core.pbrSG.specularFactor, sizeof(material.core.pbrSG.specularFactor));
+                    writeRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
+                    writeTextureRef(material.core.pbrSG.diffuseTexture);
+                    writeTextureRef(material.core.pbrSG.specularGlossinessTexture);
+                    break;
+                }
+                case VMaterialModel::ePhong: {
+                    writeRaw(&material.core.phong.diffuse, sizeof(material.core.phong.diffuse));
+                    writeRaw(&material.core.phong.specular, sizeof(material.core.phong.specular));
+                    writeRaw(&material.core.phong.shininess, sizeof(material.core.phong.shininess));
+                    writeRaw(&material.core.phong.opacity, sizeof(material.core.phong.opacity));
+                    writeRaw(&material.core.phong.ior, sizeof(material.core.phong.ior));
+                    writeRaw(&material.core.phong.emissive, sizeof(material.core.phong.emissive));
+                    writeTextureRef(material.core.phong.diffuseTexture);
+                    writeTextureRef(material.core.phong.specularTexture);
+                    writeTextureRef(material.core.phong.normalTexture);
+                    writeTextureRef(material.core.phong.opacityTexture);
+                    writeTextureRef(material.core.phong.emissiveTexture);
+                    break;
+                }
+                case VMaterialModel::ePBRMetallicRoughness:
+                case VMaterialModel::eUnknown:
+                case VMaterialModel::eCustom:
+                default: {
+                    // Default to PBR MR payload on disk for unknown/custom as best-effort.
+                    const auto& pbr = material.core.pbrMR;
+                    writeRaw(&pbr.baseColor, sizeof(pbr.baseColor));
+                    writeRaw(&pbr.metallicFactor, sizeof(pbr.metallicFactor));
+                    writeRaw(&pbr.roughnessFactor, sizeof(pbr.roughnessFactor));
 
-            // Opacity
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.opacity), sizeof(material.pbrMR.opacity));
+                    writeRaw(&pbr.alphaCutoff, sizeof(pbr.alphaCutoff));
+                    writeRaw(&pbr.alphaMode, sizeof(pbr.alphaMode));
+                    writeRaw(&pbr.opacity, sizeof(pbr.opacity));
+                    writeRaw(&pbr.blendMode, sizeof(pbr.blendMode));
 
-            // Blend Mode
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.blendMode), sizeof(material.pbrMR.blendMode));
+                    writeRaw(&pbr.emissiveColorIntensity, sizeof(pbr.emissiveColorIntensity));
+                    writeRaw(&pbr.ambientColor, sizeof(pbr.ambientColor));
+                    writeRaw(&pbr.ior, sizeof(pbr.ior));
+                    writeRaw(&pbr.doubleSided, sizeof(pbr.doubleSided));
 
-            // Metallic Factor
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.metallicFactor),
-                     sizeof(material.pbrMR.metallicFactor));
+                    writeTextureRef(pbr.baseColorTexture);
+                    writeTextureRef(pbr.alphaTexture);
+                    writeTextureRef(pbr.metallicTexture);
+                    writeTextureRef(pbr.roughnessTexture);
+                    writeTextureRef(pbr.metallicRoughnessTexture);
+                    writeTextureRef(pbr.specularTexture);
+                    writeTextureRef(pbr.normalTexture);
+                    writeTextureRef(pbr.ambientOcclusionTexture);
+                    writeTextureRef(pbr.emissiveTexture);
+                    break;
+                }
+            }
 
-            // Roughness Factor
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.roughnessFactor),
-                     sizeof(material.pbrMR.roughnessFactor));
+            // ---- texture bindings (lossless) ----
+            uint32_t texCount = static_cast<uint32_t>(material.textures.size());
+            writeRaw(&texCount, sizeof(texCount));
+            for (const auto& tb : material.textures)
+            {
+                writeRaw(&tb.type, sizeof(tb.type));
+                writeRaw(&tb.index, sizeof(tb.index));
+                writeRaw(&tb.uvIndex, sizeof(tb.uvIndex));
+                writeRaw(&tb.mapping, sizeof(tb.mapping));
+                writeRaw(&tb.op, sizeof(tb.op));
+                writeRaw(&tb.mapModeU, sizeof(tb.mapModeU));
+                writeRaw(&tb.mapModeV, sizeof(tb.mapModeV));
 
-            // Emissive Color Intensity
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.emissiveColorIntensity),
-                     sizeof(material.pbrMR.emissiveColorIntensity));
+                writeRaw(&tb.blend, sizeof(tb.blend));
+                writeTextureRef(tb.texture);
+            }
 
-            // Ambient Color
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.ambientColor), sizeof(material.pbrMR.ambientColor));
-
-            // IOR
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.ior), sizeof(material.pbrMR.ior));
-
-            // Double Sided
-            writeRaw(reinterpret_cast<const char*>(&material.pbrMR.doubleSided), sizeof(material.pbrMR.doubleSided));
-
-            // 4 bytes for name length
-            uint32_t nameLength = static_cast<uint32_t>(material.name.size());
-            writeRaw(reinterpret_cast<const char*>(&nameLength), sizeof(nameLength));
-
-            // Name string
-            writeRaw(material.name.c_str(), nameLength);
-
-            // Texture Refs
-            auto writeTextureRef = [&](const VTextureRef& texRef) {
-                writeRaw(reinterpret_cast<const char*>(&texRef.uuid), sizeof(texRef.uuid));
-            };
-
-            writeTextureRef(material.pbrMR.baseColorTexture);
-            writeTextureRef(material.pbrMR.alphaTexture);
-            writeTextureRef(material.pbrMR.metallicTexture);
-            writeTextureRef(material.pbrMR.roughnessTexture);
-            writeTextureRef(material.pbrMR.specularTexture);
-            writeTextureRef(material.pbrMR.normalTexture);
-            writeTextureRef(material.pbrMR.ambientOcclusionTexture);
-            writeTextureRef(material.pbrMR.emissiveTexture);
-            writeTextureRef(material.pbrMR.metallicRoughnessTexture);
+            // ---- dynamic properties ----
+            uint32_t propCount = static_cast<uint32_t>(material.properties.size());
+            writeRaw(&propCount, sizeof(propCount));
+            for (const auto& prop : material.properties)
+            {
+                writeString(prop.key);
+                writeRaw(&prop.semantic, sizeof(prop.semantic));
+                writeRaw(&prop.index, sizeof(prop.index));
+                writeRaw(&prop.type, sizeof(prop.type));
+                writeBytes(prop.data);
+            }
         }
 
-        // name
+// name
         uint32_t nameLength = static_cast<uint32_t>(mesh.name.size());
         writeRaw(&nameLength, sizeof(nameLength));
         writeRaw(mesh.name.c_str(), nameLength);
@@ -476,69 +531,142 @@ namespace vasset
 
         for (auto& material : outMesh.materials)
         {
-            // 4 bytes for material type
-            readRaw(reinterpret_cast<char*>(&material.type), sizeof(material.type));
-
-            // Deserialize PBRMetallicRoughness properties
-            // Base Color
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.baseColor), sizeof(material.pbrMR.baseColor));
-
-            // Alpha Cutoff
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.alphaCutoff), sizeof(material.pbrMR.alphaCutoff));
-
-            // Alpha Mode
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.alphaMode), sizeof(material.pbrMR.alphaMode));
-
-            // Opacity
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.opacity), sizeof(material.pbrMR.opacity));
-
-            // Blend Mode
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.blendMode), sizeof(material.pbrMR.blendMode));
-
-            // Metallic Factor
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.metallicFactor), sizeof(material.pbrMR.metallicFactor));
-
-            // Roughness Factor
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.roughnessFactor), sizeof(material.pbrMR.roughnessFactor));
-
-            // Emissive Color Intensity
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.emissiveColorIntensity),
-                    sizeof(material.pbrMR.emissiveColorIntensity));
-
-            // Ambient Color
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.ambientColor), sizeof(material.pbrMR.ambientColor));
-
-            // IOR
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.ior), sizeof(material.pbrMR.ior));
-
-            // Double Sided
-            readRaw(reinterpret_cast<char*>(&material.pbrMR.doubleSided), sizeof(material.pbrMR.doubleSided));
-
-            // 4 bytes for name length
-            uint32_t nameLength = 0;
-            readRaw(reinterpret_cast<char*>(&nameLength), sizeof(nameLength));
-
-            // Name string
-            material.name.resize(nameLength);
-            readRaw(&material.name[0], nameLength);
-
-            // Texture Refs
+            auto readString = [&]() -> std::string {
+                uint32_t len = 0;
+                readRaw(&len, sizeof(len));
+                std::string out;
+                out.resize(len);
+                if (len)
+                    readRaw(out.data(), len);
+                return out;
+            };
             auto readTextureRef = [&](VTextureRef& texRef) {
                 readRaw(reinterpret_cast<char*>(&texRef.uuid), sizeof(texRef.uuid));
             };
+            auto readBytes = [&]() -> std::vector<uint8_t> {
+                uint32_t sz = 0;
+                readRaw(&sz, sizeof(sz));
+                std::vector<uint8_t> bytes(sz);
+                if (sz)
+                    readRaw(bytes.data(), sz);
+                return bytes;
+            };
 
-            readTextureRef(material.pbrMR.baseColorTexture);
-            readTextureRef(material.pbrMR.alphaTexture);
-            readTextureRef(material.pbrMR.metallicTexture);
-            readTextureRef(material.pbrMR.roughnessTexture);
-            readTextureRef(material.pbrMR.specularTexture);
-            readTextureRef(material.pbrMR.normalTexture);
-            readTextureRef(material.pbrMR.ambientOcclusionTexture);
-            readTextureRef(material.pbrMR.emissiveTexture);
-            readTextureRef(material.pbrMR.metallicRoughnessTexture);
+            // 1 byte model
+            readRaw(&material.model, sizeof(material.model));
+
+            // 4 bytes features
+            readRaw(&material.features, sizeof(material.features));
+
+            // name
+            material.name = readString();
+
+            // ---- core payload ----
+            switch (material.model)
+            {
+                case VMaterialModel::eUnlit: {
+                    material.core.unlit = {};
+                    readRaw(&material.core.unlit.color, sizeof(material.core.unlit.color));
+                    readTextureRef(material.core.unlit.colorTexture);
+                    break;
+                }
+                case VMaterialModel::ePBRSpecularGlossiness: {
+                    material.core.pbrSG = {};
+                    readRaw(&material.core.pbrSG.diffuseFactor, sizeof(material.core.pbrSG.diffuseFactor));
+                    readRaw(&material.core.pbrSG.specularFactor, sizeof(material.core.pbrSG.specularFactor));
+                    readRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
+                    readTextureRef(material.core.pbrSG.diffuseTexture);
+                    readTextureRef(material.core.pbrSG.specularGlossinessTexture);
+                    break;
+                }
+                case VMaterialModel::ePhong: {
+                    material.core.phong = {};
+                    readRaw(&material.core.phong.diffuse, sizeof(material.core.phong.diffuse));
+                    readRaw(&material.core.phong.specular, sizeof(material.core.phong.specular));
+                    readRaw(&material.core.phong.shininess, sizeof(material.core.phong.shininess));
+                    readRaw(&material.core.phong.opacity, sizeof(material.core.phong.opacity));
+                    readRaw(&material.core.phong.ior, sizeof(material.core.phong.ior));
+                    readRaw(&material.core.phong.emissive, sizeof(material.core.phong.emissive));
+                    readTextureRef(material.core.phong.diffuseTexture);
+                    readTextureRef(material.core.phong.specularTexture);
+                    readTextureRef(material.core.phong.normalTexture);
+                    readTextureRef(material.core.phong.opacityTexture);
+                    readTextureRef(material.core.phong.emissiveTexture);
+                    break;
+                }
+                case VMaterialModel::ePBRMetallicRoughness:
+                case VMaterialModel::eUnknown:
+                case VMaterialModel::eCustom:
+                default: {
+                    material.core.pbrMR = {};
+                    auto& pbr = material.core.pbrMR;
+
+                    readRaw(&pbr.baseColor, sizeof(pbr.baseColor));
+                    readRaw(&pbr.metallicFactor, sizeof(pbr.metallicFactor));
+                    readRaw(&pbr.roughnessFactor, sizeof(pbr.roughnessFactor));
+
+                    readRaw(&pbr.alphaCutoff, sizeof(pbr.alphaCutoff));
+                    readRaw(&pbr.alphaMode, sizeof(pbr.alphaMode));
+                    readRaw(&pbr.opacity, sizeof(pbr.opacity));
+                    readRaw(&pbr.blendMode, sizeof(pbr.blendMode));
+
+                    readRaw(&pbr.emissiveColorIntensity, sizeof(pbr.emissiveColorIntensity));
+                    readRaw(&pbr.ambientColor, sizeof(pbr.ambientColor));
+                    readRaw(&pbr.ior, sizeof(pbr.ior));
+                    readRaw(&pbr.doubleSided, sizeof(pbr.doubleSided));
+
+                    readTextureRef(pbr.baseColorTexture);
+                    readTextureRef(pbr.alphaTexture);
+                    readTextureRef(pbr.metallicTexture);
+                    readTextureRef(pbr.roughnessTexture);
+                    readTextureRef(pbr.metallicRoughnessTexture);
+                    readTextureRef(pbr.specularTexture);
+                    readTextureRef(pbr.normalTexture);
+                    readTextureRef(pbr.ambientOcclusionTexture);
+                    readTextureRef(pbr.emissiveTexture);
+                    break;
+                }
+            }
+
+            // ---- texture bindings (lossless) ----
+            uint32_t texCount = 0;
+            readRaw(&texCount, sizeof(texCount));
+            material.textures.clear();
+            material.textures.reserve(texCount);
+            for (uint32_t ti = 0; ti < texCount; ++ti)
+            {
+                VMaterialTextureBinding tb;
+                readRaw(&tb.type, sizeof(tb.type));
+                readRaw(&tb.index, sizeof(tb.index));
+                readRaw(&tb.uvIndex, sizeof(tb.uvIndex));
+                readRaw(&tb.mapping, sizeof(tb.mapping));
+                readRaw(&tb.op, sizeof(tb.op));
+                readRaw(&tb.mapModeU, sizeof(tb.mapModeU));
+                readRaw(&tb.mapModeV, sizeof(tb.mapModeV));
+
+                readRaw(&tb.blend, sizeof(tb.blend));
+                readTextureRef(tb.texture);
+                material.textures.push_back(tb);
+            }
+
+            // ---- dynamic properties ----
+            uint32_t propCount = 0;
+            readRaw(&propCount, sizeof(propCount));
+            material.properties.clear();
+            material.properties.reserve(propCount);
+            for (uint32_t i = 0; i < propCount; ++i)
+            {
+                VMaterialProperty prop;
+                prop.key = readString();
+                readRaw(&prop.semantic, sizeof(prop.semantic));
+                readRaw(&prop.index, sizeof(prop.index));
+                readRaw(&prop.type, sizeof(prop.type));
+                prop.data = readBytes();
+                material.properties.push_back(std::move(prop));
+            }
         }
 
-        // mesh name
+// mesh name
         uint32_t nameLength = 0;
         readRaw(&nameLength, sizeof(nameLength));
 

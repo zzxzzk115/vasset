@@ -23,6 +23,7 @@
 
 #include <meshoptimizer.h>
 
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -324,7 +325,7 @@ namespace vasset
         return *this;
     }
 
-    vbase::Result<void, AssetError>
+    vbase::Result<vbase::UUID, AssetError>
     VTextureImporter::importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport) const
     {
         // ------------------------------------------------------------
@@ -355,7 +356,7 @@ namespace vasset
         // ------------------------------------------------------------
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
-            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
         // ------------------------------------------------------------
         // Check registry
@@ -364,12 +365,13 @@ namespace vasset
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
 
-        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(relativeImportedPath));
+        const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        auto       entry      = m_Registry.lookup(lookupUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing texture
             std::cout << "Texture already imported: " << entry.sourcePath << std::endl;
-            return vbase::Result<void, AssetError>::ok();
+            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
         }
 
         // Set UUID
@@ -398,13 +400,13 @@ namespace vasset
 
             auto fileBytes = readAll(path);
             if (fileBytes.empty())
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
             ddsktx_texture_info tc {0};
 
             if (!ddsktx_parse(&tc, fileBytes.data(), static_cast<int>(fileBytes.size()), nullptr))
             {
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             // Fill outTexture
@@ -429,21 +431,21 @@ namespace vasset
         {
             std::ifstream file(std::string(filePath), std::ios::binary | std::ios::ate);
             if (!file)
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
             std::streamsize size = file.tellg();
             file.seekg(0, std::ios::beg);
 
             std::vector<char> bytes(size);
             if (!file.read(bytes.data(), size))
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
             if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(bytes.data()),
                                              size,
                                              KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
                                              &ktxGuard.p) != KTX_SUCCESS)
             {
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             auto* kTexture = ktxGuard.p;
@@ -483,7 +485,7 @@ namespace vasset
                         std::cerr << "Failed to load EXR image: " << err << std::endl;
                         FreeEXRErrorMessage(err);
                     }
-                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
                 }
 
                 pixelGuard.p = img;
@@ -498,7 +500,7 @@ namespace vasset
             {
                 auto* file = fopen(filePath.data(), "rb");
                 if (!file)
-                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
                 hdr = stbi_is_hdr_from_file(file);
 
@@ -517,12 +519,12 @@ namespace vasset
                 fclose(file);
 
                 if (!pixelGuard.p)
-                    return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
             else
             {
                 std::cerr << "Unsupported image format: " << ext << std::endl;
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             // Treat everything as RGBA
@@ -577,14 +579,14 @@ namespace vasset
 
             if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktxGuard.p) != KTX_SUCCESS)
             {
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             if (ktxTexture_SetImageFromMemory(
                     ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixelGuard.p), srcSize) !=
                 KTX_SUCCESS)
             {
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             // ---------- BasisU Compression ----------
@@ -606,7 +608,7 @@ namespace vasset
             ktx_uint8_t* mem  = nullptr;
             if (ktxTexture_WriteToMemory(ktxTexture(ktxGuard.p), &mem, &size) != KTX_SUCCESS)
             {
-                return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
             // ---------- Fill outTexture ----------
@@ -633,7 +635,7 @@ namespace vasset
         if (!sr_tex)
         {
             std::cerr << "Failed to save texture." << std::endl;
-            return vbase::Result<void, AssetError>::err(sr_tex.error());
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_tex.error());
         }
 
         // Save VImport
@@ -645,13 +647,13 @@ namespace vasset
         // TODO: params
         auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
         if (!sr_import)
-            return vbase::Result<void, AssetError>::err(sr_import.error());
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
         auto rr =
             m_Registry.registerAsset(outTexture.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eTexture);
         if (!rr)
-            return vbase::Result<void, AssetError>::err(rr.error());
-        return vbase::Result<void, AssetError>::ok();
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+        return vbase::Result<vbase::UUID, AssetError>::ok(outTexture.uuid);
     }
 
     VMeshImporter::VMeshImporter(VAssetRegistry& registry) : m_Registry(registry), m_TextureImporter(registry) {}
@@ -662,24 +664,26 @@ namespace vasset
         return *this;
     }
 
-    vbase::Result<void, AssetError>
+    vbase::Result<vbase::UUID, AssetError>
     VMeshImporter::importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
     {
         // Check path
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
-            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
         // Check registry
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.string(), true);
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
-        auto entry = m_Registry.lookup(vbase::uuid_from_string_key(relativeImportedPath));
+
+        auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        auto entry      = m_Registry.lookup(lookupUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport)
         {
             // Load existing mesh
             std::cout << "Mesh already imported: " << entry.sourcePath << std::endl;
-            return vbase::Result<void, AssetError>::ok();
+            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
         }
 
         // Set UUID
@@ -696,7 +700,7 @@ namespace vasset
         const aiScene*   scene = importer.ReadFile(filePath.data(), flags);
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
-            return vbase::Result<void, AssetError>::err(AssetError::eImportFailed);
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
         outMesh.name           = scene->mRootNode->mName.C_Str();
         outMesh.sourceFileName = osPath.stem().string();
@@ -731,7 +735,7 @@ namespace vasset
         if (!sr_mesh)
         {
             std::cerr << "Failed to save mesh." << std::endl;
-            return vbase::Result<void, AssetError>::err(sr_mesh.error());
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_mesh.error());
         }
 
         // Save VImport
@@ -743,12 +747,12 @@ namespace vasset
         // TODO: params
         auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
         if (!sr_import)
-            return vbase::Result<void, AssetError>::err(sr_import.error());
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
         auto rr = m_Registry.registerAsset(outMesh.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eMesh);
         if (!rr)
-            return vbase::Result<void, AssetError>::err(rr.error());
-        return vbase::Result<void, AssetError>::ok();
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+        return vbase::Result<vbase::UUID, AssetError>::ok(outMesh.uuid);
     }
 
     void VMeshImporter::processNode(const aiNode* node, const aiScene* scene, VMesh& outMesh) const
@@ -887,146 +891,321 @@ namespace vasset
         if (!material)
             return;
 
+        outMaterial = {}; // reset
+
+        // ------------------------------------------------------------
+        // Lossless capture: Assimp properties
+        // ------------------------------------------------------------
+        outMaterial.properties.clear();
+        outMaterial.properties.reserve(material->mNumProperties);
+
+        auto toPropType = [](aiPropertyTypeInfo t) -> VMaterialPropertyType {
+            switch (t)
+            {
+                case aiPTI_Float:
+                    return VMaterialPropertyType::eFloat;
+                case aiPTI_Double:
+                    return VMaterialPropertyType::eDouble;
+                case aiPTI_String:
+                    return VMaterialPropertyType::eString;
+                case aiPTI_Integer:
+                    return VMaterialPropertyType::eInteger;
+                case aiPTI_Buffer:
+                    return VMaterialPropertyType::eBuffer;
+                default:
+                    return VMaterialPropertyType::eUnknown;
+            }
+        };
+
+        for (unsigned i = 0; i < material->mNumProperties; ++i)
+        {
+            const aiMaterialProperty* prop = material->mProperties[i];
+            if (!prop)
+                continue;
+
+            VMaterialProperty p {};
+            p.key      = prop->mKey.C_Str();
+            p.semantic = prop->mSemantic;
+            p.index    = prop->mIndex;
+            p.type     = toPropType(prop->mType);
+
+            if (prop->mType == aiPTI_String)
+            {
+                aiString value;
+                if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
+                {
+                    const char*  cstr = value.C_Str();
+                    const size_t len  = std::strlen(cstr);
+                    p.data.assign(reinterpret_cast<const uint8_t*>(cstr), reinterpret_cast<const uint8_t*>(cstr) + len);
+                }
+            }
+            else
+            {
+                if (prop->mData && prop->mDataLength)
+                {
+                    p.data.resize(prop->mDataLength);
+                    std::memcpy(p.data.data(), prop->mData, prop->mDataLength);
+                }
+            }
+
+            outMaterial.properties.push_back(std::move(p));
+        }
+
+        auto hasKeySubstring = [&](const char* sub) {
+            for (const auto& p : outMaterial.properties)
+            {
+                if (p.key.find(sub) != std::string::npos)
+                    return true;
+            }
+            return false;
+        };
+
+        // ------------------------------------------------------------
+        // Lossless capture: texture bindings
+        // ------------------------------------------------------------
+        outMaterial.textures.clear();
+        for (int tt = static_cast<int>(aiTextureType_NONE) + 1; tt <= static_cast<int>(aiTextureType_UNKNOWN); ++tt)
+        {
+            const auto     type  = static_cast<aiTextureType>(tt);
+            const unsigned count = material->GetTextureCount(type);
+            if (count == 0)
+                continue;
+
+            for (unsigned ti = 0; ti < count; ++ti)
+            {
+                aiString         path;
+                aiTextureMapping mapping    = aiTextureMapping_UV;
+                unsigned         uvIndex    = 0;
+                float            blend      = 1.0f;
+                aiTextureOp      op         = aiTextureOp_Multiply;
+                aiTextureMapMode mapMode[3] = {aiTextureMapMode_Wrap, aiTextureMapMode_Wrap, aiTextureMapMode_Wrap};
+
+                if (material->GetTexture(type, ti, &path, &mapping, &uvIndex, &blend, &op, mapMode) != aiReturn_SUCCESS)
+                    continue;
+
+                VMaterialTextureBinding tb {};
+                tb.type     = static_cast<uint16_t>(tt);
+                tb.index    = static_cast<uint16_t>(ti);
+                tb.uvIndex  = static_cast<uint8_t>(uvIndex);
+                tb.mapping  = static_cast<uint8_t>(mapping);
+                tb.op       = static_cast<uint8_t>(op);
+                tb.mapModeU = static_cast<uint8_t>(mapMode[0]);
+                tb.mapModeV = static_cast<uint8_t>(mapMode[1]);
+                tb.blend    = blend;
+
+                // Import texture file into vasset pipeline and store UUID.
+                if (path.length > 0 && path.data[0] == '*')
+                {
+                    // Embedded texture - keep empty ref; raw properties still preserve the info.
+                    tb.texture = {};
+                }
+                else
+                {
+                    tb.texture = loadTexture(material, type, ti);
+                }
+
+                outMaterial.textures.push_back(tb);
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Model + feature flags (hints)
+        // ------------------------------------------------------------
+        const bool isUnlit      = hasKeySubstring("unlit") || hasKeySubstring("Unlit");
+        const bool hasSpecGloss = hasKeySubstring("SpecularGlossiness") || hasKeySubstring("specularGloss") ||
+                                  hasKeySubstring("pbrSpecularGlossiness");
+
+        outMaterial.features = VMaterialFeatureFlags::eFeature_None;
+        if (hasKeySubstring("clearcoat"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_ClearCoat;
+        if (hasKeySubstring("transmission"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Transmission;
+        if (hasKeySubstring("sheen"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Sheen;
+        if (hasKeySubstring("volume"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Volume;
+        if (hasKeySubstring("specular"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Specular;
+        if (hasKeySubstring("iridescence"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Iridescence;
+        if (hasKeySubstring("anisotropy"))
+            outMaterial.features |= VMaterialFeatureFlags::eFeature_Anisotropy;
+
+        // ------------------------------------------------------------
+        // Core extraction (fast path)
+        // ------------------------------------------------------------
         auto props = parseMaterialProperties(material);
 
         // Name
         aiString name;
         if (tryGet(props, AI_MATKEY_NAME, name))
-        {
             outMaterial.name = name.C_Str();
-        }
 
-        // Read color properties
-        aiColor3D kd(1, 1, 1), ks(0, 0, 0), ke(0, 0, 0), ka(0, 0, 0);
-        tryGet(props, AI_MATKEY_COLOR_DIFFUSE, kd);
-        tryGet(props, AI_MATKEY_COLOR_SPECULAR, ks);
-        tryGet(props, AI_MATKEY_COLOR_EMISSIVE, ke);
-        tryGet(props, AI_MATKEY_COLOR_AMBIENT, ka);
-
-        // Read scalar properties
-        float Ns = 0.0f, d = 1.0f, Ni = 1.5f, emissiveIntensity = 1.0f;
-        tryGet(props, AI_MATKEY_EMISSIVE_INTENSITY, emissiveIntensity);
-        tryGet(props, AI_MATKEY_SHININESS, Ns);
-        tryGet(props, AI_MATKEY_OPACITY, d);
-        tryGet(props, AI_MATKEY_REFRACTI, Ni);
-
-        // Alpha masking & Blend mode
-        aiString alphaMode;
-        if (tryGet(props, AI_MATKEY_GLTF_ALPHAMODE, alphaMode))
+        if (isUnlit)
         {
-            auto alphaModeStr = std::string(alphaMode.C_Str());
-            if (alphaModeStr == "MASK")
-                outMaterial.pbrMR.alphaMode = VMaterialAlphaMode::eMask;
-            else if (alphaModeStr == "BLEND")
-                outMaterial.pbrMR.alphaMode = VMaterialAlphaMode::eBlend;
+            outMaterial.model      = VMaterialModel::eUnlit;
+            outMaterial.core.unlit = {};
+
+            aiColor4D baseColor(1, 1, 1, 1);
+            if (tryGet(props, AI_MATKEY_BASE_COLOR, baseColor))
+                outMaterial.core.unlit.color = glm::vec4(baseColor.r, baseColor.g, baseColor.b, baseColor.a);
             else
-                outMaterial.pbrMR.alphaMode = VMaterialAlphaMode::eOpaque;
+            {
+                aiColor3D kd(1, 1, 1);
+                if (tryGet(props, AI_MATKEY_COLOR_DIFFUSE, kd))
+                    outMaterial.core.unlit.color = glm::vec4(kd.r, kd.g, kd.b, 1.0f);
+            }
+
+            outMaterial.core.unlit.colorTexture = loadTexture(material, aiTextureType_DIFFUSE);
         }
-        float alphaCutoff = 0.5f;
-        if (tryGet(props, AI_MATKEY_GLTF_ALPHACUTOFF, alphaCutoff))
+        else if (hasSpecGloss)
         {
-            outMaterial.pbrMR.alphaCutoff = alphaCutoff;
-        }
-        aiBlendMode blendMode = aiBlendMode_Default;
-        if (tryGet(props, AI_MATKEY_BLEND_FUNC, blendMode))
-        {
-            outMaterial.pbrMR.blendMode = toBlendMode(blendMode);
+            outMaterial.model      = VMaterialModel::ePBRSpecularGlossiness;
+            outMaterial.core.pbrSG = {};
+
+            aiColor4D diff(1, 1, 1, 1);
+            aiColor3D spec(1, 1, 1);
+            float     gloss = 1.0f;
+
+            tryGet(props, AI_MATKEY_COLOR_DIFFUSE, diff);
+            tryGet(props, AI_MATKEY_COLOR_SPECULAR, spec);
+
+            // Assimp doesn't have a stable key for glossiness; best-effort from shininess.
+            float Ns = 0.0f;
+            if (tryGet(props, AI_MATKEY_SHININESS, Ns))
+                gloss = glm::clamp(Ns / 1000.0f, 0.0f, 1.0f);
+
+            outMaterial.core.pbrSG.diffuseFactor    = glm::vec4(diff.r, diff.g, diff.b, diff.a);
+            outMaterial.core.pbrSG.specularFactor   = glm::vec3(spec.r, spec.g, spec.b);
+            outMaterial.core.pbrSG.glossinessFactor = glm::clamp(gloss, 0.0f, 1.0f);
+
+            outMaterial.core.pbrSG.diffuseTexture            = loadTexture(material, aiTextureType_DIFFUSE);
+            outMaterial.core.pbrSG.specularGlossinessTexture = loadTexture(material, aiTextureType_SPECULAR);
         }
         else
         {
-            outMaterial.pbrMR.blendMode =
-                d < 1.0f ? toBlendMode(aiBlendMode::aiBlendMode_Default) : VMaterialBlendMode::eNone;
-        }
+            outMaterial.model      = VMaterialModel::ePBRMetallicRoughness;
+            outMaterial.core.pbrMR = {};
 
-        outMaterial.pbrMR.baseColor = glm::vec4(kd.r, kd.g, kd.b, 1.0);
-        outMaterial.pbrMR.opacity   = d;
+            // Read colors
+            aiColor3D kd(1, 1, 1), ks(0, 0, 0), ke(0, 0, 0), ka(0, 0, 0);
+            tryGet(props, AI_MATKEY_COLOR_DIFFUSE, kd);
+            tryGet(props, AI_MATKEY_COLOR_SPECULAR, ks);
+            tryGet(props, AI_MATKEY_COLOR_EMISSIVE, ke);
+            tryGet(props, AI_MATKEY_COLOR_AMBIENT, ka);
 
-        outMaterial.pbrMR.metallicFactor =
-            std::clamp((0.2126f * ks.r + 0.7152f * ks.g + 0.0722f * ks.b - 0.04f) / (1.0f - 0.04f), 0.0f, 1.0f);
-        outMaterial.pbrMR.roughnessFactor        = glm::clamp(std::sqrt(2.0f / (Ns + 2.0f)), 0.04f, 1.0f);
-        outMaterial.pbrMR.emissiveColorIntensity = glm::vec4(ke.r, ke.g, ke.b, emissiveIntensity);
-        outMaterial.pbrMR.ior                    = Ni;
-        outMaterial.pbrMR.ambientColor           = glm::vec4(ka.r, ka.g, ka.b, 1.0f);
+            // Scalars
+            float Ns = 0.0f, d = 1.0f, Ni = 1.5f, emissiveIntensity = 1.0f;
+            tryGet(props, AI_MATKEY_EMISSIVE_INTENSITY, emissiveIntensity);
+            tryGet(props, AI_MATKEY_SHININESS, Ns);
+            tryGet(props, AI_MATKEY_OPACITY, d);
+            tryGet(props, AI_MATKEY_REFRACTI, Ni);
 
-        // Override with common PBR extensions if present
-        aiColor4D baseColorFactorPBR(1, 1, 1, 1), emissiveIntensityPBR(0, 0, 0, 1);
-        float     metallicFactorPBR  = 0.0f;
-        float     roughnessFactorPBR = 0.5f;
-        if (tryGet(props, AI_MATKEY_BASE_COLOR, baseColorFactorPBR))
-        {
-            outMaterial.pbrMR.baseColor =
-                glm::vec4(baseColorFactorPBR.r, baseColorFactorPBR.g, baseColorFactorPBR.b, 1.0);
-        }
-        if (tryGet(props, AI_MATKEY_METALLIC_FACTOR, metallicFactorPBR))
-        {
-            outMaterial.pbrMR.metallicFactor = metallicFactorPBR;
-        }
-        if (tryGet(props, AI_MATKEY_ROUGHNESS_FACTOR, roughnessFactorPBR))
-        {
-            outMaterial.pbrMR.roughnessFactor = roughnessFactorPBR;
-        }
-        if (tryGet(props, AI_MATKEY_EMISSIVE_INTENSITY, emissiveIntensityPBR))
-        {
-            outMaterial.pbrMR.emissiveColorIntensity = glm::vec4(
-                emissiveIntensityPBR.r, emissiveIntensityPBR.g, emissiveIntensityPBR.b, emissiveIntensityPBR.a);
-        }
-
-        // Textures
-        outMaterial.pbrMR.baseColorTexture         = loadTexture(material, aiTextureType_DIFFUSE);
-        outMaterial.pbrMR.alphaTexture             = loadTexture(material, aiTextureType_OPACITY);
-        outMaterial.pbrMR.metallicTexture          = loadTexture(material, aiTextureType_METALNESS);
-        outMaterial.pbrMR.roughnessTexture         = loadTexture(material, aiTextureType_DIFFUSE_ROUGHNESS);
-        outMaterial.pbrMR.specularTexture          = loadTexture(material, aiTextureType_SPECULAR);
-        outMaterial.pbrMR.normalTexture            = loadTexture(material, aiTextureType_NORMALS);
-        outMaterial.pbrMR.ambientOcclusionTexture  = loadTexture(material, aiTextureType_LIGHTMAP);
-        outMaterial.pbrMR.emissiveTexture          = loadTexture(material, aiTextureType_EMISSIVE);
-        outMaterial.pbrMR.metallicRoughnessTexture = loadTexture(material, aiTextureType_GLTF_METALLIC_ROUGHNESS);
-
-        // Double sided?
-        bool doubleSided = false;
-        if (tryGet(props, AI_MATKEY_TWOSIDED, doubleSided))
-        {
-            outMaterial.pbrMR.doubleSided = doubleSided;
-        }
-
-        // Unhandled properties warning
-        for (auto& [k, v] : props)
-        {
-            if (!v.parsed)
+            // Alpha mode / cutoff
+            aiString alphaMode;
+            if (tryGet(props, AI_MATKEY_GLTF_ALPHAMODE, alphaMode))
             {
-                std::cout << "Warning: Unhandled material property: " << k.key << " (semantic: " << k.semantic
-                          << ", index: " << k.index << ")" << std::endl;
+                auto alphaModeStr = std::string(alphaMode.C_Str());
+                if (alphaModeStr == "MASK")
+                    outMaterial.core.pbrMR.alphaMode = VMaterialAlphaMode::eMask;
+                else if (alphaModeStr == "BLEND")
+                    outMaterial.core.pbrMR.alphaMode = VMaterialAlphaMode::eBlend;
+                else
+                    outMaterial.core.pbrMR.alphaMode = VMaterialAlphaMode::eOpaque;
             }
+            float alphaCutoff = 0.5f;
+            if (tryGet(props, AI_MATKEY_GLTF_ALPHACUTOFF, alphaCutoff))
+                outMaterial.core.pbrMR.alphaCutoff = alphaCutoff;
+
+            // Blend mode
+            aiBlendMode blendMode = aiBlendMode_Default;
+            if (tryGet(props, AI_MATKEY_BLEND_FUNC, blendMode))
+                outMaterial.core.pbrMR.blendMode = toBlendMode(blendMode);
+            else
+                outMaterial.core.pbrMR.blendMode =
+                    d < 1.0f ? toBlendMode(aiBlendMode::aiBlendMode_Default) : VMaterialBlendMode::eNone;
+
+            // Defaults from classic shading
+            outMaterial.core.pbrMR.baseColor = glm::vec4(kd.r, kd.g, kd.b, 1.0f);
+            outMaterial.core.pbrMR.opacity   = d;
+            outMaterial.core.pbrMR.metallicFactor =
+                std::clamp((0.2126f * ks.r + 0.7152f * ks.g + 0.0722f * ks.b - 0.04f) / (1.0f - 0.04f), 0.0f, 1.0f);
+            outMaterial.core.pbrMR.roughnessFactor        = glm::clamp(std::sqrt(2.0f / (Ns + 2.0f)), 0.04f, 1.0f);
+            outMaterial.core.pbrMR.emissiveColorIntensity = glm::vec4(ke.r, ke.g, ke.b, emissiveIntensity);
+            outMaterial.core.pbrMR.ior                    = Ni;
+            outMaterial.core.pbrMR.ambientColor           = glm::vec4(ka.r, ka.g, ka.b, 1.0f);
+
+            // glTF overrides
+            aiColor4D baseColorFactorPBR(1, 1, 1, 1);
+            float     metallicFactorPBR  = 1.0f;
+            float     roughnessFactorPBR = 1.0f;
+            if (tryGet(props, AI_MATKEY_BASE_COLOR, baseColorFactorPBR))
+                outMaterial.core.pbrMR.baseColor =
+                    glm::vec4(baseColorFactorPBR.r, baseColorFactorPBR.g, baseColorFactorPBR.b, baseColorFactorPBR.a);
+            if (tryGet(props, AI_MATKEY_METALLIC_FACTOR, metallicFactorPBR))
+                outMaterial.core.pbrMR.metallicFactor = metallicFactorPBR;
+            if (tryGet(props, AI_MATKEY_ROUGHNESS_FACTOR, roughnessFactorPBR))
+                outMaterial.core.pbrMR.roughnessFactor = roughnessFactorPBR;
+
+            // Double sided
+            bool doubleSided = false;
+            if (tryGet(props, AI_MATKEY_TWOSIDED, doubleSided))
+                outMaterial.core.pbrMR.doubleSided = doubleSided;
+
+            // Core textures
+            outMaterial.core.pbrMR.baseColorTexture        = loadTexture(material, aiTextureType_DIFFUSE);
+            outMaterial.core.pbrMR.alphaTexture            = loadTexture(material, aiTextureType_OPACITY);
+            outMaterial.core.pbrMR.metallicTexture         = loadTexture(material, aiTextureType_METALNESS);
+            outMaterial.core.pbrMR.roughnessTexture        = loadTexture(material, aiTextureType_DIFFUSE_ROUGHNESS);
+            outMaterial.core.pbrMR.specularTexture         = loadTexture(material, aiTextureType_SPECULAR);
+            outMaterial.core.pbrMR.normalTexture           = loadTexture(material, aiTextureType_NORMALS);
+            outMaterial.core.pbrMR.ambientOcclusionTexture = loadTexture(material, aiTextureType_LIGHTMAP);
+            outMaterial.core.pbrMR.emissiveTexture         = loadTexture(material, aiTextureType_EMISSIVE);
+            outMaterial.core.pbrMR.metallicRoughnessTexture =
+                loadTexture(material, aiTextureType_GLTF_METALLIC_ROUGHNESS);
         }
 
-        // Log material info
-        std::cout << "Imported material: " << outMaterial.name << std::endl;
+        if (outMaterial.name.empty())
+            outMaterial.name = "Material";
+
+        std::cout << "Imported material: " << outMaterial.name << " (model=" << static_cast<int>(outMaterial.model)
+                  << ", props=" << outMaterial.properties.size() << ", textures=" << outMaterial.textures.size() << ")"
+                  << std::endl;
     }
 
     VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, aiTextureType type) const
     {
+        return loadTexture(material, type, 0);
+    }
+
+    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, aiTextureType type, unsigned index) const
+    {
         if (!material)
             return {};
 
-        if (material->GetTextureCount(type) > 0)
+        if (material->GetTextureCount(type) > index)
         {
             aiString str;
-            if (material->GetTexture(type, 0, &str) == aiReturn_SUCCESS)
+            if (material->GetTexture(type, index, &str) == aiReturn_SUCCESS)
             {
                 VTexture              texture {};
                 std::filesystem::path relativePath(str.C_Str());
 
                 std::filesystem::path texPath = std::filesystem::path(m_FilePath).parent_path() / relativePath;
 
-                if (!m_TextureImporter.importTexture(texPath.generic_string(), texture))
+                auto tr = m_TextureImporter.importTexture(texPath.generic_string(), texture);
+                if (!tr)
                 {
                     std::cerr << "Failed to import texture: " << texPath << std::endl;
                     return {};
                 }
 
-                std::cout << "  Loaded texture: " << texPath << ", " << texture.toString() << std::endl;
+                const auto uuid = tr.value();
 
-                return VTextureRef {texture.uuid};
+                // Optional verbose log
+                std::cout << "  Loaded texture: " << texPath << ", uuid: " << vbase::to_string(uuid) << std::endl;
+
+                return VTextureRef {uuid};
             }
         }
         return {};
