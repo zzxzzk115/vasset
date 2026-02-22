@@ -2,6 +2,7 @@
 
 #include "vasset/asset_error.hpp"
 #include "vasset/vmesh.hpp"
+#include "vbase/core/uuid.hpp"
 
 #include <vbase/core/result.hpp>
 #include <vbase/core/string_view.hpp>
@@ -35,7 +36,7 @@ namespace vasset
 
         VTextureImporter& setOptions(const ImportOptions& options);
 
-        vbase::Result<void, AssetError>
+        vbase::Result<vbase::UUID, AssetError>
         importTexture(vbase::StringView filePath, VTexture& outTexture, bool forceReimport = false) const;
 
     private:
@@ -55,14 +56,17 @@ namespace vasset
 
         VMeshImporter& setOptions(const ImportOptions& options);
 
-        vbase::Result<void, AssetError>
+        vbase::Result<vbase::UUID, AssetError>
         importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
 
     private:
-        void        processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
-        void        processMesh(const aiMesh*, const aiScene*, VMesh& outMesh) const;
-        void        processMaterial(const aiMaterial*, VMaterial& outMaterial) const;
+        void processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
+        void processMesh(const aiMesh*, const aiScene*, VMesh& outMesh) const;
+        void processMaterial(const aiMaterial*, VMaterial& outMaterial) const;
+        // Load and import texture referenced by Assimp material.
+        // - If index is omitted, loads the first texture (index 0).
         VTextureRef loadTexture(const aiMaterial*, aiTextureType) const;
+        VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index) const;
 
         static void generateMeshlets(VMesh& outMesh);
 
