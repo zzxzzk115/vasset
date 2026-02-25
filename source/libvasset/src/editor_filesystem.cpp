@@ -12,7 +12,7 @@ namespace vasset
     bool EditorRemapFileSystem::exists(vbase::StringView p) const
     {
         // Remap-aware exists: if .vimport exists, check imported output; otherwise fall back to base.
-        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").string();
+        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").generic_string();
         if (m_PhysicalFS->exists(importPath))
         {
             auto vi = loadVImport(m_PhysicalFS->getFullPath(importPath));
@@ -25,7 +25,7 @@ namespace vasset
 
     bool EditorRemapFileSystem::isFile(vbase::StringView p) const
     {
-        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").string();
+        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").generic_string();
         if (m_PhysicalFS->exists(importPath))
         {
             auto vi = loadVImport(m_PhysicalFS->getFullPath(importPath));
@@ -45,7 +45,7 @@ namespace vasset
     vbase::Result<std::unique_ptr<vfilesystem::IFile>, vfilesystem::FsError>
     EditorRemapFileSystem::open(vbase::StringView p, vfilesystem::FileMode mode)
     {
-        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").string();
+        std::string importPath = std::filesystem ::path(p).replace_extension(".vimport").generic_string();
         if (m_PhysicalFS->exists(importPath))
         {
             auto vi = loadVImport(m_PhysicalFS->getFullPath(importPath));

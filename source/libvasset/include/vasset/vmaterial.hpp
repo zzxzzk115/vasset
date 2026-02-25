@@ -100,21 +100,20 @@ namespace vasset
     // `type` is the numeric value of Assimp aiTextureType.
     struct VMaterialTextureBinding
     {
-        uint16_t    type {0};
-        uint16_t    index {0};
+        uint16_t type {0};
+        uint16_t index {0};
 
         // From aiMaterial::GetTexture(...)
-        uint8_t     uvIndex {0};
-        uint8_t     mapping {0};
-        uint8_t     op {0};
-        uint8_t     mapModeU {0};
-        uint8_t     mapModeV {0};
+        uint8_t uvIndex {0};
+        uint8_t mapping {0};
+        uint8_t op {0};
+        uint8_t mapModeU {0};
+        uint8_t mapModeV {0};
 
-        float       blend {1.0f};
+        float blend {1.0f};
 
         VTextureRef texture;
     };
-
 
     // ------------------------------------------------------------
     // Core model payloads (fixed-layout fast path)
@@ -156,7 +155,7 @@ namespace vasset
 
     struct VMaterialPBRSpecularGlossiness
     {
-        glm::vec4 diffuseFactor {1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 diffuseColor {1.0f, 1.0f, 1.0f, 1.0f};
         glm::vec3 specularFactor {1.0f, 1.0f, 1.0f};
         float     glossinessFactor {1.0f};
 
@@ -166,7 +165,7 @@ namespace vasset
 
     struct VMaterialUnlit
     {
-        glm::vec4 color {1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4   color {1.0f, 1.0f, 1.0f, 1.0f};
         VTextureRef colorTexture;
     };
 
@@ -188,10 +187,10 @@ namespace vasset
 
     union VMaterialCoreData
     {
-        VMaterialPBRMetallicRoughness pbrMR;
+        VMaterialPBRMetallicRoughness  pbrMR;
         VMaterialPBRSpecularGlossiness pbrSG;
-        VMaterialUnlit unlit;
-        VMaterialPhong phong;
+        VMaterialUnlit                 unlit;
+        VMaterialPhong                 phong;
 
         VMaterialCoreData() {}
         ~VMaterialCoreData() {}

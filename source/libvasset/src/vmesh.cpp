@@ -190,7 +190,7 @@ namespace vasset
                     break;
                 }
                 case VMaterialModel::ePBRSpecularGlossiness: {
-                    writeRaw(&material.core.pbrSG.diffuseFactor, sizeof(material.core.pbrSG.diffuseFactor));
+                    writeRaw(&material.core.pbrSG.diffuseColor, sizeof(material.core.pbrSG.diffuseColor));
                     writeRaw(&material.core.pbrSG.specularFactor, sizeof(material.core.pbrSG.specularFactor));
                     writeRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
                     writeTextureRef(material.core.pbrSG.diffuseTexture);
@@ -274,7 +274,7 @@ namespace vasset
             }
         }
 
-// name
+        // name
         uint32_t nameLength = static_cast<uint32_t>(mesh.name.size());
         writeRaw(&nameLength, sizeof(nameLength));
         writeRaw(mesh.name.c_str(), nameLength);
@@ -572,7 +572,7 @@ namespace vasset
                 }
                 case VMaterialModel::ePBRSpecularGlossiness: {
                     material.core.pbrSG = {};
-                    readRaw(&material.core.pbrSG.diffuseFactor, sizeof(material.core.pbrSG.diffuseFactor));
+                    readRaw(&material.core.pbrSG.diffuseColor, sizeof(material.core.pbrSG.diffuseColor));
                     readRaw(&material.core.pbrSG.specularFactor, sizeof(material.core.pbrSG.specularFactor));
                     readRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
                     readTextureRef(material.core.pbrSG.diffuseTexture);
@@ -599,7 +599,7 @@ namespace vasset
                 case VMaterialModel::eCustom:
                 default: {
                     material.core.pbrMR = {};
-                    auto& pbr = material.core.pbrMR;
+                    auto& pbr           = material.core.pbrMR;
 
                     readRaw(&pbr.baseColor, sizeof(pbr.baseColor));
                     readRaw(&pbr.metallicFactor, sizeof(pbr.metallicFactor));
@@ -666,7 +666,7 @@ namespace vasset
             }
         }
 
-// mesh name
+        // mesh name
         uint32_t nameLength = 0;
         readRaw(&nameLength, sizeof(nameLength));
 
