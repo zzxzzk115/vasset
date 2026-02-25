@@ -275,11 +275,11 @@ namespace vasset
         if (relative)
         {
             std::filesystem::path relativePath = std::filesystem::relative(fullPath, assetRoot);
-            return relativePath.string();
+            return relativePath.generic_string();
         }
         else
         {
-            return fullPath.string();
+            return fullPath.generic_string();
         }
     }
 
@@ -293,7 +293,7 @@ namespace vasset
         {
             std::filesystem::path assetRoot(m_AssetRootPath);
             std::filesystem::path fullPath = assetRoot / out;
-            return fullPath.string();
+            return fullPath.generic_string();
         }
 
         return out;

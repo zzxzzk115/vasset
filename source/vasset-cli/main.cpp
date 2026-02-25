@@ -99,10 +99,10 @@ static int cmd_pack(int argc, char** argv)
 
         ++importCount;
 
-        auto vi = loadVImport(p.string());
+        auto vi = loadVImport(p.generic_string());
         if (!vi)
         {
-            std::cerr << "Failed to read .vimport: " << p.string() << std::endl;
+            std::cerr << "Failed to read .vimport: " << p.generic_string() << std::endl;
             continue;
         }
 
@@ -112,7 +112,7 @@ static int cmd_pack(int argc, char** argv)
         std::ifstream f(outPath, std::ios::binary);
         if (!f)
         {
-            std::cerr << "Missing cooked file: " << outPath << " (from " << p.string() << ")" << std::endl;
+            std::cerr << "Missing cooked file: " << outPath << " (from " << p.generic_string() << ")" << std::endl;
             continue;
         }
 

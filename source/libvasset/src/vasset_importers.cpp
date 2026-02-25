@@ -361,9 +361,9 @@ namespace vasset
         // ------------------------------------------------------------
         // Check registry
         // ------------------------------------------------------------
-        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.string(), true);
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), true);
+            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().generic_string(), true);
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto       entry      = m_Registry.lookup(lookupUUID);
@@ -383,12 +383,12 @@ namespace vasset
         // ------------------------------------------------------------
         // Extension dispatch
         // ------------------------------------------------------------
-        std::string ext = osPath.extension().string();
+        std::string ext = osPath.extension().generic_string();
 
         // ======================== KTX / DDS ========================
         if (isKTXDDS(ext))
         {
-            auto pathStr = osPath.string();
+            auto pathStr = osPath.generic_string();
 
 #ifndef _WIN32
             // Ensure the path is in the correct format for KTX/DDS parsing
@@ -478,7 +478,7 @@ namespace vasset
                 const char* err = nullptr;
                 float*      img = nullptr;
 
-                if (LoadEXR(&img, &width, &height, osPath.string().c_str(), &err) != TINYEXR_SUCCESS)
+                if (LoadEXR(&img, &width, &height, osPath.generic_string().c_str(), &err) != TINYEXR_SUCCESS)
                 {
                     if (err)
                     {
@@ -498,7 +498,9 @@ namespace vasset
             // ---------- STB ----------
             else if (isSTB(ext))
             {
+                // NOLINTBEGIN
                 auto* file = fopen(filePath.data(), "rb");
+                // NOLINTEND
                 if (!file)
                     return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
@@ -629,7 +631,7 @@ namespace vasset
 
     SUCCESS:
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().string(), false);
+            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().generic_string(), false);
 
         auto sr_tex = saveTexture(outTexture, importedPath);
         if (!sr_tex)
@@ -645,7 +647,7 @@ namespace vasset
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
         // TODO: params
-        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
+        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
@@ -673,9 +675,9 @@ namespace vasset
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
         // Check registry
-        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.string(), true);
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), true);
+            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().generic_string(), true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -703,7 +705,7 @@ namespace vasset
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
         outMesh.name           = scene->mRootNode->mName.C_Str();
-        outMesh.sourceFileName = osPath.stem().string();
+        outMesh.sourceFileName = osPath.stem().generic_string();
 
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
@@ -729,7 +731,7 @@ namespace vasset
         // Note: Joint indices and weights would require additional processing, e.g., from bones
 
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().string(), false);
+            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().generic_string(), false);
 
         auto sr_mesh = saveMesh(outMesh, importedPath, 3);
         if (!sr_mesh)
@@ -745,7 +747,7 @@ namespace vasset
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
         // TODO: params
-        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").string());
+        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
@@ -1075,7 +1077,7 @@ namespace vasset
             if (tryGet(props, AI_MATKEY_SHININESS, Ns))
                 gloss = glm::clamp(Ns / 1000.0f, 0.0f, 1.0f);
 
-            outMaterial.core.pbrSG.diffuseFactor    = glm::vec4(diff.r, diff.g, diff.b, diff.a);
+            outMaterial.core.pbrSG.diffuseColor     = glm::vec4(diff.r, diff.g, diff.b, diff.a);
             outMaterial.core.pbrSG.specularFactor   = glm::vec3(spec.r, spec.g, spec.b);
             outMaterial.core.pbrSG.glossinessFactor = glm::clamp(gloss, 0.0f, 1.0f);
 
@@ -1308,8 +1310,8 @@ namespace vasset
             if (!entry.is_regular_file())
                 continue;
 
-            const std::string filePath = entry.path().string();
-            const std::string ext      = entry.path().extension().string();
+            const std::string filePath = entry.path().generic_string();
+            const std::string ext      = entry.path().extension().generic_string();
 
             if (isValidTexture(ext))
             {
@@ -1336,7 +1338,7 @@ namespace vasset
         if (!std::filesystem::exists(osPath) || std::filesystem::is_directory(osPath))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
-        const std::string ext = osPath.extension().string();
+        const std::string ext = osPath.extension().generic_string();
 
         if (isValidTexture(ext))
         {
