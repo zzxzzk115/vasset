@@ -1242,17 +1242,18 @@ namespace vasset
             sub.meshletGroup.meshletTriangles.resize(baseTriOffset + maxMeshlets * maxTris * 3);
 
             // build meshlets
-            size_t meshletCount = meshopt_buildMeshlets(meshletsTemp.data(),
-                                                        sub.meshletGroup.meshletVertices.data() + baseVertOffset,
-                                                        sub.meshletGroup.meshletTriangles.data() + baseTriOffset,
-                                                        subIndices,
-                                                        subCount,
-                                                        reinterpret_cast<const float*>(outMesh.positions.data()),
-                                                        outMesh.positions.size(),
-                                                        sizeof(glm::vec3),
-                                                        maxVerts,
-                                                        maxTris,
-                                                        0.5f);
+            size_t meshletCount =
+                meshopt_buildMeshlets(meshletsTemp.data(),
+                                      sub.meshletGroup.meshletVertices.data() + baseVertOffset,
+                                      sub.meshletGroup.meshletTriangles.data() + baseTriOffset,
+                                      subIndices,
+                                      subCount,
+                                      reinterpret_cast<const float*>(outMesh.positions.data() + sub.vertexOffset),
+                                      sub.vertexCount,
+                                      sizeof(glm::vec3),
+                                      maxVerts,
+                                      maxTris,
+                                      0.5f);
 
             meshletsTemp.resize(meshletCount);
 
@@ -1277,12 +1278,13 @@ namespace vasset
                                         dst.vertexCount);
 
                 // Compute bounding sphere and cone for culling
-                auto bounds = meshopt_computeMeshletBounds(&sub.meshletGroup.meshletVertices[dst.vertexOffset],
-                                                           &sub.meshletGroup.meshletTriangles[dst.triangleOffset],
-                                                           dst.triangleCount,
-                                                           reinterpret_cast<const float*>(outMesh.positions.data()),
-                                                           outMesh.positions.size(),
-                                                           sizeof(glm::vec3));
+                auto bounds = meshopt_computeMeshletBounds(
+                    &sub.meshletGroup.meshletVertices[dst.vertexOffset],
+                    &sub.meshletGroup.meshletTriangles[dst.triangleOffset],
+                    dst.triangleCount,
+                    reinterpret_cast<const float*>(outMesh.positions.data() + sub.vertexOffset),
+                    sub.vertexCount,
+                    sizeof(glm::vec3));
 
                 dst.center     = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
                 dst.radius     = bounds.radius;
