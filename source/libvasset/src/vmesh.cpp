@@ -119,6 +119,9 @@ namespace vasset
                 writeRaw(&meshlet.materialIndex, sizeof(meshlet.materialIndex));
                 writeRaw(&meshlet.center, sizeof(meshlet.center));
                 writeRaw(&meshlet.radius, sizeof(meshlet.radius));
+                writeRaw(&meshlet.coneAxis, sizeof(meshlet.coneAxis));
+                writeRaw(&meshlet.coneCutoff, sizeof(meshlet.coneCutoff));
+                writeRaw(&meshlet.coneApex, sizeof(meshlet.coneApex));
             }
 
             // 4 bytes for length of meshlet vertices
@@ -496,6 +499,9 @@ namespace vasset
                 readRaw(&meshlet.materialIndex, sizeof(meshlet.materialIndex));
                 readRaw(&meshlet.center, sizeof(meshlet.center));
                 readRaw(&meshlet.radius, sizeof(meshlet.radius));
+                readRaw(&meshlet.coneAxis, sizeof(meshlet.coneAxis));
+                readRaw(&meshlet.coneCutoff, sizeof(meshlet.coneCutoff));
+                readRaw(&meshlet.coneApex, sizeof(meshlet.coneApex));
             }
 
             uint32_t meshletVertexCount = 0;
