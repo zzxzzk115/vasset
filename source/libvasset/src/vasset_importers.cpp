@@ -1270,6 +1270,13 @@ namespace vasset
                 // --- Assign material index directly from submesh ---
                 dst.materialIndex = sub.materialIndex;
 
+                // Optimize meshlets
+                meshopt_optimizeMeshlet(&sub.meshletGroup.meshletVertices[dst.vertexOffset],
+                                        &sub.meshletGroup.meshletTriangles[dst.triangleOffset],
+                                        dst.triangleCount,
+                                        dst.vertexCount);
+
+                // Compute bounding sphere and cone for culling
                 auto bounds = meshopt_computeMeshletBounds(&sub.meshletGroup.meshletVertices[dst.vertexOffset],
                                                            &sub.meshletGroup.meshletTriangles[dst.triangleOffset],
                                                            dst.triangleCount,
