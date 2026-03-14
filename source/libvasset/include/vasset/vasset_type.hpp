@@ -12,6 +12,7 @@ namespace vasset
         eTexture,
         eMaterial,
         eMesh,
+        eGaussianSplat,
     };
 
     inline std::string toString(VAssetType type)
@@ -24,6 +25,8 @@ namespace vasset
                 return "material";
             case VAssetType::eMesh:
                 return "mesh";
+            case VAssetType::eGaussianSplat:
+                return "gaussian_splat";
             case VAssetType::eUnknown:
             default:
                 return "unknown";
@@ -43,6 +46,10 @@ namespace vasset
         else if (typeStr == "mesh")
         {
             return VAssetType::eMesh;
+        }
+        else if (typeStr == "gaussian_splat")
+        {
+            return VAssetType::eGaussianSplat;
         }
         else
         {

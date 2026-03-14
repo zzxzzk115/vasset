@@ -1,6 +1,7 @@
 #include "vasset/vasset_importers.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
+#include "vasset/vgaussiansplat.hpp"
 #include "vasset/vimport.hpp"
 
 #include <vbase/core/result.hpp>
@@ -23,6 +24,11 @@
 
 #include <meshoptimizer.h>
 
+#include <miniply.h>
+
+#include <load-spz.h>
+
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -53,6 +59,8 @@ namespace
     {
         return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
     }
+
+    bool isValidGaussianSplat(vbase::StringView ext) { return ext == ".ply" || ext == ".spz"; }
 
     vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
     {
@@ -1303,8 +1311,118 @@ namespace vasset
         }
     }
 
+    // ─── VGaussianSplatImporter ──────────────────────────────────────────────────
+
+    VGaussianSplatImporter::VGaussianSplatImporter(VAssetRegistry& registry) : m_Registry(registry) {}
+
+    VGaussianSplatImporter& VGaussianSplatImporter::setOptions(const ImportOptions& options)
+    {
+        m_Options = options;
+        return *this;
+    }
+
+    vbase::Result<vbase::UUID, AssetError>
+    VGaussianSplatImporter::importGaussianSplat(vbase::StringView filePath, VGaussianSplat& outSplat,
+                                                bool             forceReimport) const
+    {
+        std::filesystem::path osPath(filePath);
+        if (!std::filesystem::exists(osPath))
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        const std::string relativeSrcPath =
+            m_Registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string relativeImportedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, osPath.stem().generic_string(), true);
+
+        auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        auto entry      = m_Registry.lookup(lookupUUID);
+        if (entry.type != VAssetType::eUnknown && !forceReimport)
+        {
+            std::cout << "GaussianSplat already imported: " << entry.sourcePath << std::endl;
+            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+        }
+
+        outSplat = {};
+        outSplat.uuid           = lookupUUID;
+        outSplat.name           = osPath.stem().generic_string();
+        outSplat.sourceFileName = osPath.filename().generic_string();
+
+        // ── Load cloud via spz ───────────────────────────────────────────────────
+        const std::string  ext = osPath.extension().generic_string();
+        spz::GaussianCloud cloud;
+        spz::UnpackOptions unpackOpts {};
+
+        if (ext == ".spz")
+            cloud = spz::loadSpz(osPath.string(), unpackOpts);
+        else if (ext == ".ply")
+            cloud = spz::loadSplatFromPly(osPath.string(), unpackOpts);
+        else
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eNotSupported);
+
+        if (cloud.numPoints == 0)
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        // ── Fill per-splat data ──────────────────────────────────────────────────
+        const int32_t N      = cloud.numPoints;
+        outSplat.numPoints   = N;
+        outSplat.shDegree    = cloud.shDegree;
+        outSplat.antialiased = cloud.antialiased;
+        outSplat.sh          = cloud.sh; // copy higher-order SH coefficients as-is
+
+        outSplat.splats.resize(N);
+        for (int32_t i = 0; i < N; ++i)
+        {
+            VGaussianSplatPoint& p = outSplat.splats[i];
+            p.position = glm::vec3(cloud.positions[i * 3 + 0],
+                                   cloud.positions[i * 3 + 1],
+                                   cloud.positions[i * 3 + 2]);
+            p.opacity  = cloud.alphas[i]; // raw logit; renderer applies sigmoid
+            p.scale    = glm::vec3(cloud.scales[i * 3 + 0],
+                                   cloud.scales[i * 3 + 1],
+                                   cloud.scales[i * 3 + 2]); // log-space; renderer applies exp
+            p.pad0     = 0.0f;
+            p.rotation = glm::vec4(cloud.rotations[i * 4 + 0],
+                                   cloud.rotations[i * 4 + 1],
+                                   cloud.rotations[i * 4 + 2],
+                                   cloud.rotations[i * 4 + 3]); // xyzw
+            p.shDC     = glm::vec3(cloud.colors[i * 3 + 0],
+                                   cloud.colors[i * 3 + 1],
+                                   cloud.colors[i * 3 + 2]); // raw SH DC; renderer decodes
+            p.pad1     = 0.0f;
+        }
+
+        // ── Save cooked asset ────────────────────────────────────────────────────
+        const std::string importedPath =
+            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, osPath.stem().generic_string(), false);
+
+        auto sr = saveGaussianSplat(outSplat, importedPath, m_Options.zstdLevel);
+        if (!sr)
+            return vbase::Result<vbase::UUID, AssetError>::err(sr.error());
+
+        // ── Save .vimport sidecar ────────────────────────────────────────────────
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eGaussianSplat);
+        vimport.uid      = lookupUUID;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+
+        auto importSidecarPath = osPath;
+        importSidecarPath.replace_extension(".vimport");
+        auto sr_import = saveVImport(vimport, importSidecarPath.generic_string());
+        if (!sr_import)
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
+
+        auto rr = m_Registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath,
+                                           VAssetType::eGaussianSplat);
+        if (!rr)
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+    }
+
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
-        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry)
+        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry),
+        m_GaussianSplatImporter(registry)
     {}
 
     vbase::Result<void, AssetError> VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath,
@@ -1336,6 +1454,13 @@ namespace vasset
                 if (!mr)
                     return vbase::Result<void, AssetError>::err(mr.error());
             }
+            else if (isValidGaussianSplat(ext))
+            {
+                VGaussianSplat splat;
+                auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
+                if (!gr)
+                    return vbase::Result<void, AssetError>::err(gr.error());
+            }
         }
 
         return vbase::Result<void, AssetError>::ok();
@@ -1364,6 +1489,15 @@ namespace vasset
             auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
             if (!mr)
                 return vbase::Result<void, AssetError>::err(mr.error());
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        if (isValidGaussianSplat(ext))
+        {
+            VGaussianSplat splat;
+            auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
+            if (!gr)
+                return vbase::Result<void, AssetError>::err(gr.error());
             return vbase::Result<void, AssetError>::ok();
         }
 

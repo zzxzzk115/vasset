@@ -25,6 +25,19 @@ int main()
     VAssetImporter assetImporter {registry};
     assetImporter.importOrReimportAssetFolder("resources");
 
+    std::string spzPath = "resources/splats/hornedlizard.spz";
+    if (!std::filesystem::exists(spzPath))
+    {
+        spzPath = "external/vasset/resources/splats/hornedlizard.spz";
+    }
+
+    auto spzImport = assetImporter.importOrReimportAsset(spzPath, true);
+    if (!spzImport)
+    {
+        std::cerr << "Failed to import SPZ file: " << spzPath << std::endl;
+        return 1;
+    }
+
     registry.save("resources/imported/asset_registry.vreg");
 
     VAssetRegistry loadedRegistry {};
@@ -73,6 +86,17 @@ int main()
                         std::cout << "  Material: " << material.name << std::endl;
                     }
                 }
+            }
+        }
+        else if (entry.type == VAssetType::eGaussianSplat)
+        {
+            std::string    splatPath = loadedRegistry.getAssetRootPath() + "/" + entry.importedPath;
+            VGaussianSplat splat {};
+            if (loadGaussianSplat(splatPath, splat))
+            {
+                std::cout << "Loaded gaussian splat: " << splatPath << " (" << splat.name << ") with "
+                          << splat.numPoints << " points, shDegree=" << splat.shDegree
+                          << ", antialiased=" << (splat.antialiased ? "true" : "false") << std::endl;
             }
         }
     }
