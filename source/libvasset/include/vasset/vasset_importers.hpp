@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vasset/asset_error.hpp"
+#include "vasset/vgaussiansplat.hpp"
 #include "vasset/vmesh.hpp"
 #include "vbase/core/uuid.hpp"
 
@@ -77,6 +78,26 @@ namespace vasset
         std::string      m_FilePath;
     };
 
+    class VGaussianSplatImporter
+    {
+    public:
+        struct ImportOptions
+        {
+            int zstdLevel {3};
+        };
+
+        VGaussianSplatImporter(VAssetRegistry& registry);
+
+        VGaussianSplatImporter& setOptions(const ImportOptions& options);
+
+        vbase::Result<vbase::UUID, AssetError>
+        importGaussianSplat(vbase::StringView filePath, VGaussianSplat& outSplat, bool forceReimport = false) const;
+
+    private:
+        VAssetRegistry& m_Registry;
+        ImportOptions   m_Options;
+    };
+
     class VAssetImporter
     {
     public:
@@ -86,12 +107,14 @@ namespace vasset
                                                                     bool              reimport = false);
         vbase::Result<void, AssetError> importOrReimportAsset(vbase::StringView filePath, bool reimport = false);
 
-        VMeshImporter&    getMeshImporter() { return m_MeshImporter; }
-        VTextureImporter& getTextureImporter() { return m_TextureImporter; }
+        VMeshImporter&          getMeshImporter() { return m_MeshImporter; }
+        VTextureImporter&       getTextureImporter() { return m_TextureImporter; }
+        VGaussianSplatImporter& getGaussianSplatImporter() { return m_GaussianSplatImporter; }
 
     private:
-        VAssetRegistry&  m_Registry;
-        VMeshImporter    m_MeshImporter;
-        VTextureImporter m_TextureImporter;
+        VAssetRegistry&        m_Registry;
+        VMeshImporter          m_MeshImporter;
+        VTextureImporter       m_TextureImporter;
+        VGaussianSplatImporter m_GaussianSplatImporter;
     };
 } // namespace vasset
