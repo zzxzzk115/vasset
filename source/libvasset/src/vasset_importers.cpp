@@ -24,9 +24,8 @@
 
 #include <meshoptimizer.h>
 
-#include <miniply.h>
-
 #include <load-spz.h>
+#include <miniply.h>
 
 #include <cmath>
 #include <cstring>
@@ -1321,16 +1320,15 @@ namespace vasset
         return *this;
     }
 
-    vbase::Result<vbase::UUID, AssetError>
-    VGaussianSplatImporter::importGaussianSplat(vbase::StringView filePath, VGaussianSplat& outSplat,
-                                                bool             forceReimport) const
+    vbase::Result<vbase::UUID, AssetError> VGaussianSplatImporter::importGaussianSplat(vbase::StringView filePath,
+                                                                                       VGaussianSplat&   outSplat,
+                                                                                       bool forceReimport) const
     {
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
-        const std::string relativeSrcPath =
-            m_Registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, osPath.stem().generic_string(), true);
 
@@ -1342,7 +1340,7 @@ namespace vasset
             return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
         }
 
-        outSplat = {};
+        outSplat                = {};
         outSplat.uuid           = lookupUUID;
         outSplat.name           = osPath.stem().generic_string();
         outSplat.sourceFileName = osPath.filename().generic_string();
@@ -1353,9 +1351,18 @@ namespace vasset
         spz::UnpackOptions unpackOpts {};
 
         if (ext == ".spz")
+        {
+            // SPZ stores data in RUB (Right Up Back = Y-up) which matches the engine world convention.
             cloud = spz::loadSpz(osPath.string(), unpackOpts);
+        }
         else if (ext == ".ply")
-            cloud = spz::loadSplatFromPly(osPath.string(), unpackOpts);
+        {
+            // PLY (3DGS format) stores data in RDF (Right Down Forward = Y-down, Z-forward).
+            // Convert to RUB (Y-up) so positions and SH coefficients match the engine world convention.
+            // Without this, SH view-direction evaluation is incorrect for Y-flipped scenes.
+            unpackOpts.to = spz::CoordinateSystem::RUB;
+            cloud         = spz::loadSplatFromPly(osPath.string(), unpackOpts);
+        }
         else
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eNotSupported);
 
@@ -1373,21 +1380,19 @@ namespace vasset
         for (int32_t i = 0; i < N; ++i)
         {
             VGaussianSplatPoint& p = outSplat.splats[i];
-            p.position = glm::vec3(cloud.positions[i * 3 + 0],
-                                   cloud.positions[i * 3 + 1],
-                                   cloud.positions[i * 3 + 2]);
+            p.position = glm::vec3(cloud.positions[i * 3 + 0], cloud.positions[i * 3 + 1], cloud.positions[i * 3 + 2]);
             p.opacity  = cloud.alphas[i]; // raw logit; renderer applies sigmoid
             p.scale    = glm::vec3(cloud.scales[i * 3 + 0],
-                                   cloud.scales[i * 3 + 1],
-                                   cloud.scales[i * 3 + 2]); // log-space; renderer applies exp
+                                cloud.scales[i * 3 + 1],
+                                cloud.scales[i * 3 + 2]); // log-space; renderer applies exp
             p.pad0     = 0.0f;
             p.rotation = glm::vec4(cloud.rotations[i * 4 + 0],
                                    cloud.rotations[i * 4 + 1],
                                    cloud.rotations[i * 4 + 2],
                                    cloud.rotations[i * 4 + 3]); // xyzw
             p.shDC     = glm::vec3(cloud.colors[i * 3 + 0],
-                                   cloud.colors[i * 3 + 1],
-                                   cloud.colors[i * 3 + 2]); // raw SH DC; renderer decodes
+                               cloud.colors[i * 3 + 1],
+                               cloud.colors[i * 3 + 2]); // raw SH DC; renderer decodes
             p.pad1     = 0.0f;
         }
 
@@ -1412,8 +1417,8 @@ namespace vasset
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
-        auto rr = m_Registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath,
-                                           VAssetType::eGaussianSplat);
+        auto rr =
+            m_Registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, VAssetType::eGaussianSplat);
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
 
@@ -1421,8 +1426,7 @@ namespace vasset
     }
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
-        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry),
-        m_GaussianSplatImporter(registry)
+        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry), m_GaussianSplatImporter(registry)
     {}
 
     vbase::Result<void, AssetError> VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath,
