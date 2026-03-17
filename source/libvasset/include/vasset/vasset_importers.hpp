@@ -21,14 +21,14 @@ namespace vasset
     public:
         struct ImportOptions
         {
-            bool               generateMipmaps {false};
+            bool               generateMipmaps {true};
             bool               flipY {false};
             VTextureFileFormat targetTextureFileFormat {VTextureFileFormat::eKTX2};
 
             // BasisU options, only used if targetTextureFileFormat is eKTX2
             bool     uastc {false};         // true: high quality; false: fast compression
-            bool     noSSE {false};         // true: enable SSE; false: disable SSE
-            uint32_t qualityLevel {128};    // 1-255
+            bool     noSSE {false};         // true: disable SSE; false: enable SSE
+            uint32_t qualityLevel {255};    // 1-255
             uint32_t compressionLevel {2};  // 0-4
             uint32_t basisUThreadCount {0}; // 0 = auto-detect
         };

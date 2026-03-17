@@ -11,6 +11,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include <stb/stb_image_resize2.h>
+
 #define DDSKTX_IMPLEMENT
 #include <dds-ktx.h>
 
@@ -156,6 +159,14 @@ namespace
             default:
                 return vasset::VTextureFormat::eUnknown;
         }
+    }
+
+    // Helper to calculate number of mip levels for given dimensions
+    uint32_t calculateMipLevels(uint32_t width, uint32_t height)
+    {
+        if (width == 0 || height == 0)
+            return 1;
+        return 1 + static_cast<uint32_t>(std::floor(std::log2(static_cast<double>(std::max(width, height)))));
     }
 
     std::vector<uint8_t> readAll(const std::filesystem::path& p)
@@ -417,16 +428,15 @@ namespace vasset
             }
 
             // Fill outTexture
-            outTexture.width           = static_cast<uint32_t>(tc.width);
-            outTexture.height          = static_cast<uint32_t>(tc.height);
-            outTexture.depth           = static_cast<uint32_t>(tc.depth);
-            outTexture.mipLevels       = tc.num_mips;
-            outTexture.arrayLayers     = tc.num_layers;
-            outTexture.isCubemap       = (tc.flags & DDSKTX_TEXTURE_FLAG_CUBEMAP) != 0;
-            outTexture.generateMipmaps = m_Options.generateMipmaps;
-            outTexture.type            = VTextureDimension::e2D;
-            outTexture.format          = toVTextureFormat(tc.format);
-            outTexture.fileFormat      = (ext == ".ktx") ? VTextureFileFormat::eKTX : VTextureFileFormat::eDDS;
+            outTexture.width       = static_cast<uint32_t>(tc.width);
+            outTexture.height      = static_cast<uint32_t>(tc.height);
+            outTexture.depth       = static_cast<uint32_t>(tc.depth);
+            outTexture.mipLevels   = tc.num_mips;
+            outTexture.arrayLayers = tc.num_layers;
+            outTexture.isCubemap   = (tc.flags & DDSKTX_TEXTURE_FLAG_CUBEMAP) != 0;
+            outTexture.type        = VTextureDimension::e2D;
+            outTexture.format      = toVTextureFormat(tc.format);
+            outTexture.fileFormat  = (ext == ".ktx") ? VTextureFileFormat::eKTX : VTextureFileFormat::eDDS;
 
             outTexture.data.assign(fileBytes.begin(), fileBytes.end());
 
@@ -458,14 +468,13 @@ namespace vasset
             auto* kTexture = ktxGuard.p;
 
             // Fill outTexture
-            outTexture.width           = kTexture->baseWidth;
-            outTexture.height          = kTexture->baseHeight;
-            outTexture.depth           = kTexture->baseDepth;
-            outTexture.mipLevels       = kTexture->numLevels;
-            outTexture.arrayLayers     = kTexture->numLayers;
-            outTexture.isCubemap       = kTexture->numFaces == 6;
-            outTexture.generateMipmaps = kTexture->generateMipmaps;
-            outTexture.type            = static_cast<VTextureDimension>(kTexture->numDimensions);
+            outTexture.width       = kTexture->baseWidth;
+            outTexture.height      = kTexture->baseHeight;
+            outTexture.depth       = kTexture->baseDepth;
+            outTexture.mipLevels   = kTexture->numLevels;
+            outTexture.arrayLayers = kTexture->numLayers;
+            outTexture.isCubemap   = kTexture->numFaces == 6;
+            outTexture.type        = static_cast<VTextureDimension>(kTexture->numDimensions);
 
             outTexture.format = static_cast<VTextureFormat>(kTexture->vkFormat);
 
@@ -557,16 +566,15 @@ namespace vasset
             {
                 auto fileBytes = readAll(osPath);
 
-                outTexture.width           = width;
-                outTexture.height          = height;
-                outTexture.depth           = 1;
-                outTexture.mipLevels       = 1;
-                outTexture.arrayLayers     = 1;
-                outTexture.isCubemap       = false;
-                outTexture.generateMipmaps = m_Options.generateMipmaps;
-                outTexture.type            = VTextureDimension::e2D;
-                outTexture.format          = targetTextureFormat;
-                outTexture.fileFormat      = targetFormat;
+                outTexture.width       = width;
+                outTexture.height      = height;
+                outTexture.depth       = 1;
+                outTexture.mipLevels   = 1;
+                outTexture.arrayLayers = 1;
+                outTexture.isCubemap   = false;
+                outTexture.type        = VTextureDimension::e2D;
+                outTexture.format      = targetTextureFormat;
+                outTexture.fileFormat  = targetFormat;
 
                 outTexture.data.assign(fileBytes.begin(), fileBytes.end());
 
@@ -578,12 +586,12 @@ namespace vasset
             ci.baseWidth       = width;
             ci.baseHeight      = height;
             ci.baseDepth       = 1;
-            ci.numLevels       = 1;
+            ci.numLevels       = m_Options.generateMipmaps ? calculateMipLevels(width, height) : 1;
             ci.numLayers       = 1;
             ci.numFaces        = 1;
             ci.numDimensions   = 2;
             ci.isArray         = KTX_FALSE;
-            ci.generateMipmaps = m_Options.generateMipmaps;
+            ci.generateMipmaps = KTX_FALSE; // We generate mipmaps manually
             ci.vkFormat        = static_cast<uint32_t>(targetTextureFormat);
 
             if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktxGuard.p) != KTX_SUCCESS)
@@ -591,6 +599,7 @@ namespace vasset
                 return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
+            // Set image data for base level
             if (ktxTexture_SetImageFromMemory(
                     ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixelGuard.p), srcSize) !=
                 KTX_SUCCESS)
@@ -598,18 +607,127 @@ namespace vasset
                 return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
             }
 
-            // ---------- BasisU Compression ----------
-            ktxBasisParams params {};
-            params.structSize       = sizeof(ktxBasisParams);
-            params.uastc            = m_Options.uastc;
-            params.noSSE            = m_Options.noSSE;
-            params.qualityLevel     = m_Options.qualityLevel;
-            params.compressionLevel = m_Options.compressionLevel;
-            params.threadCount      = m_Options.basisUThreadCount;
-
-            if (ktxTexture2_CompressBasisEx(ktxGuard.p, &params) != KTX_SUCCESS)
+            // Generate mipmaps if needed
+            if (ci.numLevels > 1)
             {
-                std::cout << "Warning: Failed to compress texture with BasisU." << std::endl;
+                uint32_t             mipW    = static_cast<uint32_t>(width);
+                uint32_t             mipH    = static_cast<uint32_t>(height);
+                const void*          prevPtr = pixelGuard.p;
+                std::vector<uint8_t> prev8;
+                std::vector<float>   prevf;
+
+                for (uint32_t level = 1; level < ci.numLevels; ++level)
+                {
+                    uint32_t nextW = mipW > 1 ? mipW / 2 : 1;
+                    uint32_t nextH = mipH > 1 ? mipH / 2 : 1;
+
+                    if (hdr)
+                    {
+                        std::vector<float> nextf(static_cast<size_t>(nextW) * nextH * channels);
+                        if (!stbir_resize_float_linear(reinterpret_cast<const float*>(prevPtr),
+                                                       static_cast<int>(mipW),
+                                                       static_cast<int>(mipH),
+                                                       0,
+                                                       nextf.data(),
+                                                       static_cast<int>(nextW),
+                                                       static_cast<int>(nextH),
+                                                       0,
+                                                       static_cast<stbir_pixel_layout>(STBIR_4CHANNEL)))
+                        {
+                            std::cerr << "Failed to resize float image for mip generation." << std::endl;
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+
+                        ktx_size_t nextSize = static_cast<ktx_size_t>(nextf.size() * sizeof(float));
+                        if (ktxTexture_SetImageFromMemory(ktxTexture(ktxGuard.p),
+                                                          level,
+                                                          0,
+                                                          0,
+                                                          reinterpret_cast<const ktx_uint8_t*>(nextf.data()),
+                                                          nextSize) != KTX_SUCCESS)
+                        {
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+
+                        prevf   = std::move(nextf);
+                        prevPtr = prevf.data();
+                    }
+                    else
+                    {
+                        std::vector<uint8_t> nextu(static_cast<size_t>(nextW) * nextH * channels);
+                        if (!stbir_resize_uint8_srgb(reinterpret_cast<const unsigned char*>(prevPtr),
+                                                     static_cast<int>(mipW),
+                                                     static_cast<int>(mipH),
+                                                     0,
+                                                     nextu.data(),
+                                                     static_cast<int>(nextW),
+                                                     static_cast<int>(nextH),
+                                                     0,
+                                                     static_cast<stbir_pixel_layout>(STBIR_4CHANNEL)))
+                        {
+                            std::cerr << "Failed to resize uint8 image for mip generation." << std::endl;
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+
+                        ktx_size_t nextSize = static_cast<ktx_size_t>(nextu.size());
+                        if (ktxTexture_SetImageFromMemory(ktxTexture(ktxGuard.p),
+                                                          level,
+                                                          0,
+                                                          0,
+                                                          reinterpret_cast<const ktx_uint8_t*>(nextu.data()),
+                                                          nextSize) != KTX_SUCCESS)
+                        {
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+
+                        prev8   = std::move(nextu);
+                        prevPtr = prev8.data();
+                    }
+
+                    mipW = nextW;
+                    mipH = nextH;
+                }
+            }
+
+            // ---------- BasisU Compression ----------
+            // BasisU compressors expect 8-bit LDR input. Skip compression for HDR/float images
+            // and add diagnostic logging on failure to help debugging.
+            if (!hdr)
+            {
+                ktxBasisParams params {};
+                params.structSize       = sizeof(ktxBasisParams);
+                params.uastc            = m_Options.uastc;
+                params.noSSE            = m_Options.noSSE;
+                params.qualityLevel     = m_Options.qualityLevel;
+                params.compressionLevel = m_Options.compressionLevel;
+                params.threadCount      = m_Options.basisUThreadCount;
+
+                // Diagnostic: log vkFormat and mip count
+                std::cout << "BasisU: vkFormat=" << ci.vkFormat << " numLevels=" << ci.numLevels << "\n";
+
+                KTX_error_code res = ktxTexture2_CompressBasisEx(ktxGuard.p, &params);
+                if (res != KTX_SUCCESS)
+                {
+                    std::cerr << "Warning: Failed to compress texture with BasisU. ktx result=" << res << std::endl;
+
+                    // Print expected level sizes to help track mismatches
+                    ktx_uint32_t lvlW = ci.baseWidth;
+                    ktx_uint32_t lvlH = ci.baseHeight;
+                    for (ktx_uint32_t lvl = 0; lvl < ci.numLevels; ++lvl)
+                    {
+                        ktx_size_t expectedSize =
+                            static_cast<ktx_size_t>(lvlW) * lvlH * 4 * (hdr ? sizeof(float) : sizeof(uint8_t));
+                        std::cerr << "  level " << lvl << " expected bytes=" << expectedSize << " w=" << lvlW
+                                  << " h=" << lvlH << std::endl;
+                        lvlW = lvlW > 1 ? lvlW / 2 : 1;
+                        lvlH = lvlH > 1 ? lvlH / 2 : 1;
+                    }
+                }
+            }
+            else
+            {
+                std::cout << "Skipping BasisU compression for HDR/float texture (vkFormat=" << ci.vkFormat << ")"
+                          << std::endl;
             }
 
             // ---------- Write to memory ----------
@@ -621,17 +739,15 @@ namespace vasset
             }
 
             // ---------- Fill outTexture ----------
-            outTexture.width           = width;
-            outTexture.height          = height;
-            outTexture.depth           = ci.baseDepth;
-            outTexture.mipLevels       = ci.numLevels;
-            outTexture.arrayLayers     = ci.numLayers;
-            outTexture.isCubemap       = ci.numFaces == 6;
-            outTexture.generateMipmaps = ci.generateMipmaps;
-            outTexture.type            = static_cast<VTextureDimension>(ci.numDimensions);
-
-            outTexture.format     = targetTextureFormat;
-            outTexture.fileFormat = VTextureFileFormat::eKTX2;
+            outTexture.width       = width;
+            outTexture.height      = height;
+            outTexture.depth       = ci.baseDepth;
+            outTexture.mipLevels   = ci.numLevels;
+            outTexture.arrayLayers = ci.numLayers;
+            outTexture.isCubemap   = ci.numFaces == 6;
+            outTexture.type        = static_cast<VTextureDimension>(ci.numDimensions);
+            outTexture.format      = targetTextureFormat;
+            outTexture.fileFormat  = VTextureFileFormat::eKTX2;
 
             outTexture.data.assign(mem, mem + size);
         }

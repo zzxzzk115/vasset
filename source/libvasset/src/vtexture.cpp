@@ -43,9 +43,6 @@ namespace vasset
         // 4 bytes for isCubemap
         file.write(reinterpret_cast<const char*>(&texture.isCubemap), sizeof(texture.isCubemap));
 
-        // 4 bytes for generateMipmaps
-        file.write(reinterpret_cast<const char*>(&texture.generateMipmaps), sizeof(texture.generateMipmaps));
-
         // 4 bytes for type
         file.write(reinterpret_cast<const char*>(&texture.type), sizeof(texture.type));
 
@@ -131,9 +128,6 @@ namespace vasset
 
         // 4 bytes for isCubemap
         readSafe(&outTexture.isCubemap, sizeof(outTexture.isCubemap));
-
-        // 4 bytes for generateMipmaps
-        readSafe(&outTexture.generateMipmaps, sizeof(outTexture.generateMipmaps));
 
         // 4 bytes for type
         readSafe(&outTexture.type, sizeof(outTexture.type));
