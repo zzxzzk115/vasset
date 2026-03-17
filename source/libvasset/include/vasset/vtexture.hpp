@@ -113,7 +113,6 @@ namespace vasset
         uint32_t             mipLevels {1};
         uint32_t             arrayLayers {1};
         bool                 isCubemap {false};
-        bool                 generateMipmaps {false};
         VTextureDimension    type {VTextureDimension::e2D};
         VTextureFormat       format {VTextureFormat::eRGBA8};
         VTextureFileFormat   fileFormat {VTextureFileFormat::ePNG};
@@ -125,7 +124,6 @@ namespace vasset
                    ", height: " + std::to_string(height) + ", depth: " + std::to_string(depth) +
                    ", mipLevels: " + std::to_string(mipLevels) + ", arrayLayers: " + std::to_string(arrayLayers) +
                    ", isCubemap: " + std::to_string(isCubemap) +
-                   ", generateMipmaps: " + std::to_string(generateMipmaps) +
                    ", type: " + std::to_string(static_cast<uint32_t>(type)) +
                    ", format: " + std::to_string(static_cast<uint32_t>(format)) +
                    ", fileFormat: " + std::to_string(static_cast<uint32_t>(fileFormat)) +
