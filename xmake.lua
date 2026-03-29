@@ -2,7 +2,7 @@
 set_project("vasset")
 
 -- set project version
-set_version("0.2.1")
+set_version("0.3.0")
 
 -- set language version: C++ 23
 set_languages("cxx23")
@@ -14,13 +14,13 @@ set_config("vasset_project_dir", os.scriptdir())
 
 -- global options
 option("vasset_build_examples") -- build examples?
-    set_default(true)
+    set_default(not is_plat("android"))
     set_showmenu(true)
     set_description("Enable vasset examples")
 option_end()
 
 option("vasset_build_tests") -- build tests?
-    set_default(true)
+    set_default(not is_plat("android"))
     set_showmenu(true)
     set_description("Enable vasset tests")
 option_end()

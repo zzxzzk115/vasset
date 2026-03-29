@@ -1,2 +1,4 @@
 includes("libvasset")
-includes("vasset-cli")
+if not is_plat("android") then
+    includes("vasset-cli")
+end
