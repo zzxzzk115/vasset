@@ -1,48 +1,72 @@
 add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
-add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
+if not is_plat("android") then
+    add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
+end
 if is_plat("windows") then
     add_requires("ktx-windows")
 else
     add_requires("ktx", {configs = {decoder = true, vulkan = true}})
 end
 
--- target defination, name: vasset
+local runtime_headers = {
+    "include/vasset/asset_error.hpp",
+    "include/vasset/uuid_resolver.hpp",
+    "include/vasset/vasset_registry.hpp",
+    "include/vasset/vasset_runtime.hpp",
+    "include/vasset/vasset_type.hpp",
+    "include/vasset/vgaussiansplat.hpp",
+    "include/vasset/vmaterial.hpp",
+    "include/vasset/vmesh.hpp",
+    "include/vasset/vpk.hpp",
+    "include/vasset/vtexture.hpp",
+    "include/vasset/vvertex.hpp",
+}
+
+local import_headers = {
+    "include/vasset/editor_filesystem.hpp",
+    "include/vasset/vasset.hpp",
+    "include/vasset/vasset_import.hpp",
+    "include/vasset/vasset_importers.hpp",
+    "include/vasset/vimport.hpp",
+}
+
+-- target definition, name: vasset
 target("vasset")
-    -- set target kind: static library
     set_kind("static")
-
-    -- add include dir
-    add_includedirs("include", {public = true}) -- public: let other targets to auto include
-
-    -- add header files
-    add_headerfiles("include/(vasset/**.hpp)")
-
-    -- add source files
-    add_files("src/**.cpp")
-
-    -- add deps
-    add_deps("dds-ktx", "miniply", "spz", "vfilesystem", {public = true})
-
-    -- add packages
-    add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", "assimp", { public = true })
+    add_includedirs("include", {public = true})
+    add_headerfiles(table.unpack(runtime_headers))
+    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
+              "src/vtexture.cpp")
+    add_deps("dds-ktx", "vfilesystem", {public = true})
+    add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })
     if is_plat("windows") then
         add_packages("ktx-windows", { public = true })
     else
         add_packages("ktx", { public = true })
     end
-
-    -- add defines
     if is_mode("debug") then
         add_defines("_DEBUG", { public = true })
     else
         add_defines("NDEBUG", { public = true })
     end
-
-    -- GLM force settings
-    add_defines("GLM_FORCE_DEPTH_ZERO_TO_ONE", { public = true }) -- for vulkan depth range [0, 1]
-    -- add_defines("GLM_FORCE_LEFT_HANDED", { public = true }) -- for left-handed coordinate system
-    add_defines("GLM_ENABLE_EXPERIMENTAL", { public = true }) -- for experimental features
-    add_defines("GLM_FORCE_RADIANS", { public = true }) -- force radians
-
-    -- set target directory
+    add_defines("GLM_FORCE_DEPTH_ZERO_TO_ONE", { public = true })
+    add_defines("GLM_ENABLE_EXPERIMENTAL", { public = true })
+    add_defines("GLM_FORCE_RADIANS", { public = true })
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset")
+
+if not is_plat("android") then
+    target("vasset-import")
+        set_kind("static")
+        add_includedirs("include", {public = true})
+        add_headerfiles(table.unpack(import_headers))
+        add_files("src/editor_filesystem.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
+        add_deps("vasset", "miniply", "spz", {public = true})
+        add_packages("assimp", { public = true })
+        if is_mode("debug") then
+            add_defines("_DEBUG", { public = true })
+        else
+            add_defines("NDEBUG", { public = true })
+        end
+        add_defines("VASSET_HAS_IMPORTERS", { public = true })
+        set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset-import")
+end

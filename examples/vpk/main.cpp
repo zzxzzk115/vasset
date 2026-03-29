@@ -1,4 +1,4 @@
-#include <vasset/vasset.hpp>
+#include <vasset/vasset_runtime.hpp>
 #include <vfilesystem/vfs/virtual_filesystem.hpp>
 
 #include <iostream>

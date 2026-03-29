@@ -1,4 +1,4 @@
-#include <vasset/vasset.hpp>
+#include <vasset/vasset_import.hpp>
 
 #include <filesystem>
 #include <fstream>

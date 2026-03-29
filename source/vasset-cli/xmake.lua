@@ -7,7 +7,7 @@ target("vasset-cli")
     add_files("**.cpp")
 
     -- add deps
-    add_deps("vasset")
+    add_deps("vasset-import")
 
     -- add defines
     if is_mode("debug") then
