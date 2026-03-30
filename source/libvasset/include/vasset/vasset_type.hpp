@@ -13,6 +13,9 @@ namespace vasset
         eMaterial,
         eMesh,
         eGaussianSplat,
+        eScene,
+        eSceneManifest,
+        eScriptLua,
     };
 
     inline std::string toString(VAssetType type)
@@ -27,6 +30,12 @@ namespace vasset
                 return "mesh";
             case VAssetType::eGaussianSplat:
                 return "gaussian_splat";
+            case VAssetType::eScene:
+                return "scene";
+            case VAssetType::eSceneManifest:
+                return "scene_manifest";
+            case VAssetType::eScriptLua:
+                return "script_lua";
             case VAssetType::eUnknown:
             default:
                 return "unknown";
@@ -50,6 +59,18 @@ namespace vasset
         else if (typeStr == "gaussian_splat")
         {
             return VAssetType::eGaussianSplat;
+        }
+        else if (typeStr == "scene")
+        {
+            return VAssetType::eScene;
+        }
+        else if (typeStr == "scene_manifest")
+        {
+            return VAssetType::eSceneManifest;
+        }
+        else if (typeStr == "script_lua")
+        {
+            return VAssetType::eScriptLua;
         }
         else
         {

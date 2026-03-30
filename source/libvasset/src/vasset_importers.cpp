@@ -64,6 +64,17 @@ namespace
 
     bool isValidGaussianSplat(vbase::StringView ext) { return ext == ".ply" || ext == ".spz"; }
 
+    bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
+
+    bool isValidSceneManifest(vbase::StringView ext) { return ext == ".vmanifest"; }
+
+    bool isValidScriptLua(vbase::StringView ext) { return ext == ".lua"; }
+
+    bool isValidSourceTextAsset(vbase::StringView ext)
+    {
+        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext);
+    }
+
     vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
     {
         switch (format)
@@ -180,6 +191,80 @@ namespace
         if (!f.read(reinterpret_cast<char*>(data.data()), sz))
             return {};
         return data;
+    }
+
+    bool writeAll(const std::filesystem::path& p, const std::vector<uint8_t>& data)
+    {
+        if (p.has_parent_path())
+            std::filesystem::create_directories(p.parent_path());
+
+        std::ofstream f(p, std::ios::binary);
+        if (!f)
+            return false;
+
+        if (!data.empty())
+            f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+
+        return static_cast<bool>(f);
+    }
+
+    vasset::VAssetType inferSourceTextAssetType(const std::string& ext)
+    {
+        if (ext == ".vscn")
+            return vasset::VAssetType::eScene;
+        if (ext == ".vmanifest")
+            return vasset::VAssetType::eSceneManifest;
+        if (ext == ".lua")
+            return vasset::VAssetType::eScriptLua;
+        return vasset::VAssetType::eUnknown;
+    }
+
+    vbase::Result<vbase::UUID, vasset::AssetError> importSourceTextAsset(vasset::VAssetRegistry& registry,
+                                                                         vbase::StringView       filePath,
+                                                                         bool                    forceReimport,
+                                                                         vasset::VAssetType      type)
+    {
+        namespace fs = std::filesystem;
+
+        const std::string filePathStr(filePath);
+        fs::path          osPath(filePathStr);
+        if (!fs::exists(osPath) || fs::is_directory(osPath))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+
+        const std::string relativeSrcPath      = registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string relativeImportedPath = registry.getImportedAssetPath(
+            type, osPath.stem().generic_string() + osPath.extension().generic_string(), true);
+
+        auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        auto entry      = registry.lookup(lookupUUID);
+        if (entry.type != vasset::VAssetType::eUnknown && !forceReimport)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+
+        const auto srcBytes = readAll(osPath);
+        if (srcBytes.empty() && !fs::exists(osPath))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+
+        const fs::path importedPath = fs::path(registry.getAssetRootPath()) / relativeImportedPath;
+        if (!writeAll(importedPath, srcBytes))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eIOError);
+
+        vasset::VImport vimport {};
+        vimport.importer = vasset::toString(type);
+        vimport.uid      = lookupUUID;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+
+        fs::path importSidecarPath = fs::path(registry.getAssetRootPath()) / relativeImportedPath;
+        importSidecarPath.replace_extension(".vimport");
+        auto sr_import = saveVImport(vimport, importSidecarPath.generic_string());
+        if (!sr_import)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+
+        auto rr = registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, type);
+        if (!rr)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(rr.error());
+
+        return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
     }
 } // namespace
 
@@ -1558,7 +1643,10 @@ namespace vasset
                 continue;
 
             const std::string filePath = entry.path().generic_string();
-            const std::string ext      = entry.path().extension().generic_string();
+            const std::string relPath  = std::filesystem::relative(entry.path(), osPath).generic_string();
+            if (relPath == "imported" || relPath.rfind("imported/", 0) == 0)
+                continue;
+            const std::string ext = entry.path().extension().generic_string();
 
             if (isValidTexture(ext))
             {
@@ -1581,6 +1669,13 @@ namespace vasset
                 if (!gr)
                     return vbase::Result<void, AssetError>::err(gr.error());
             }
+            else if (isValidSourceTextAsset(ext))
+            {
+                auto type = inferSourceTextAssetType(ext);
+                auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
+                if (!rr)
+                    return vbase::Result<void, AssetError>::err(rr.error());
+            }
         }
 
         return vbase::Result<void, AssetError>::ok();
@@ -1591,6 +1686,11 @@ namespace vasset
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath) || std::filesystem::is_directory(osPath))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
+
+        const std::string relPath =
+            std::filesystem::relative(osPath, std::filesystem::path(m_Registry.getAssetRootPath())).generic_string();
+        if (relPath == "imported" || relPath.rfind("imported/", 0) == 0)
+            return vbase::Result<void, AssetError>::err(AssetError::eNotSupported);
 
         const std::string ext = osPath.extension().generic_string();
 
@@ -1618,6 +1718,15 @@ namespace vasset
             auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
             if (!gr)
                 return vbase::Result<void, AssetError>::err(gr.error());
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        if (isValidSourceTextAsset(ext))
+        {
+            auto type = inferSourceTextAssetType(ext);
+            auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
+            if (!rr)
+                return vbase::Result<void, AssetError>::err(rr.error());
             return vbase::Result<void, AssetError>::ok();
         }
 
