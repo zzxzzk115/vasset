@@ -33,6 +33,10 @@ local import_headers = {
 -- target definition, name: vasset
 target("vasset")
     set_kind("static")
+    if is_plat("android") then
+        add_cflags("-fPIC")
+        add_cxflags("-fPIC")
+    end
     add_includedirs("include", {public = true})
     add_headerfiles(table.unpack(runtime_headers))
     add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
@@ -57,6 +61,10 @@ target("vasset")
 if not is_plat("android") then
     target("vasset-import")
         set_kind("static")
+        if is_plat("android") then
+            add_cflags("-fPIC")
+            add_cxflags("-fPIC")
+        end
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
         add_files("src/editor_filesystem.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
