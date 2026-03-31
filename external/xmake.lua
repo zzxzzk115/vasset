@@ -22,4 +22,13 @@ target("spz")
     add_files("spz/**.cc")
     add_packages("zlib")
 
+target("GaussForge")
+    set_kind("static")
+    set_default(false)
+    add_headerfiles("GaussForge/include/(gf/**.h)")
+    add_includedirs("GaussForge/include", {public = true})
+    add_files("GaussForge/src/core/**.cpp", "GaussForge/src/io/**.cpp")
+    remove_files("GaussForge/src/io/sog_*.cpp")
+    add_deps("spz", {public = true})
+
 includes("vfilesystem")

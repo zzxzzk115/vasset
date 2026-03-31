@@ -41,7 +41,7 @@ namespace vasset
         std::string sourceFileName; // not serialized
 
         int32_t numPoints {0};
-        int32_t shDegree {0}; // 0, 1, 2, or 3
+        int32_t shDegree {0}; // 0, 1, 2, 3, or 4
         bool    antialiased {false};
 
         // Per-splat data -- size == numPoints.
@@ -50,7 +50,7 @@ namespace vasset
         // Higher-order spherical harmonics coefficients (omitted when shDegree == 0).
         // Layout: for each point, for each coefficient, 3 RGB floats -- fastest-varying axis is channel.
         // Total size: numPoints * shCoeffsPerPoint(shDegree) * 3
-        //   degree 1 ->  9 floats/point, degree 2 -> 24, degree 3 -> 45
+        //   degree 1 ->  9 floats/point, degree 2 -> 24, degree 3 -> 45, degree 4 -> 72
         std::vector<float> sh;
     };
 

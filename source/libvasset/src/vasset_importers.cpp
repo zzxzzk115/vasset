@@ -25,10 +25,10 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
-#include <meshoptimizer.h>
+#include <gf/core/gauss_ir.h>
+#include <gf/io/registry.h>
 
-#include <load-spz.h>
-#include <miniply.h>
+#include <meshoptimizer.h>
 
 #include <cmath>
 #include <cstring>
@@ -62,7 +62,10 @@ namespace
         return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
     }
 
-    bool isValidGaussianSplat(vbase::StringView ext) { return ext == ".ply" || ext == ".spz"; }
+    bool isValidGaussianSplat(vbase::StringView ext)
+    {
+        return ext == ".ply" || ext == ".spz" || ext == ".splat" || ext == ".ksplat";
+    }
 
     bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
 
@@ -206,6 +209,37 @@ namespace
             f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
 
         return static_cast<bool>(f);
+    }
+
+    bool endsWith(const std::string& value, const std::string& suffix)
+    {
+        return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    std::string gaussianSplatRegistryKey(const std::filesystem::path& path)
+    {
+        const std::string filename = path.filename().generic_string();
+        if (endsWith(filename, ".compressed.ply"))
+            return "compressed.ply";
+
+        const std::string ext = path.extension().generic_string();
+        if (ext == ".ply")
+            return "ply";
+        if (ext == ".spz")
+            return "spz";
+        if (ext == ".splat")
+            return "splat";
+        if (ext == ".ksplat")
+            return "ksplat";
+        return {};
+    }
+
+    std::string gaussianSplatAssetBaseName(const std::filesystem::path& path)
+    {
+        const std::string filename = path.filename().generic_string();
+        if (endsWith(filename, ".compressed.ply"))
+            return filename.substr(0, filename.size() - std::strlen(".compressed.ply"));
+        return path.stem().generic_string();
     }
 
     vasset::VAssetType inferSourceTextAssetType(const std::string& ext)
@@ -1529,9 +1563,10 @@ namespace vasset
         if (!std::filesystem::exists(osPath))
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
+        const std::string assetBaseName   = gaussianSplatAssetBaseName(osPath);
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, osPath.stem().generic_string(), true);
+            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, assetBaseName, true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -1543,63 +1578,60 @@ namespace vasset
 
         outSplat                = {};
         outSplat.uuid           = lookupUUID;
-        outSplat.name           = osPath.stem().generic_string();
+        outSplat.name           = assetBaseName;
         outSplat.sourceFileName = osPath.filename().generic_string();
 
-        // ── Load cloud via spz ───────────────────────────────────────────────────
-        const std::string  ext = osPath.extension().generic_string();
-        spz::GaussianCloud cloud;
-        spz::UnpackOptions unpackOpts {};
-
-        if (ext == ".spz")
-        {
-            // SPZ stores data in RUB (Right Up Back = Y-up) which matches the engine world convention.
-            cloud = spz::loadSpz(osPath.string(), unpackOpts);
-        }
-        else if (ext == ".ply")
-        {
-            // PLY (3DGS format) stores data in RDF (Right Down Forward = Y-down, Z-forward).
-            // Convert to RUB (Y-up) so positions and SH coefficients match the engine world convention.
-            // Without this, SH view-direction evaluation is incorrect for Y-flipped scenes.
-            unpackOpts.to = spz::CoordinateSystem::RUB;
-            cloud         = spz::loadSplatFromPly(osPath.string(), unpackOpts);
-        }
-        else
+        const std::string formatKey = gaussianSplatRegistryKey(osPath);
+        if (formatKey.empty())
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eNotSupported);
 
-        if (cloud.numPoints == 0)
+        std::vector<uint8_t> rawData = readAll(osPath);
+        if (rawData.empty())
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
-        // ── Fill per-splat data ──────────────────────────────────────────────────
+        static const gf::IORegistry kGaussForgeRegistry {};
+        auto*                       reader = kGaussForgeRegistry.ReaderForExt(formatKey);
+        if (reader == nullptr)
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eNotSupported);
+
+        gf::ReadOptions readOptions {};
+        auto            irResult = reader->Read(rawData.data(), rawData.size(), readOptions);
+        if (!irResult)
+        {
+            std::cerr << "GaussianSplat import failed: " << irResult.error().message << std::endl;
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+        }
+
+        const gf::GaussianCloudIR& cloud = irResult.value();
+        if (cloud.numPoints <= 0)
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        // Fill per-splat data from GaussForge IR.
         const int32_t N      = cloud.numPoints;
         outSplat.numPoints   = N;
-        outSplat.shDegree    = cloud.shDegree;
-        outSplat.antialiased = cloud.antialiased;
-        outSplat.sh          = cloud.sh; // copy higher-order SH coefficients as-is
+        outSplat.shDegree    = cloud.meta.shDegree;
+        outSplat.antialiased = cloud.meta.antialiased;
+        outSplat.sh          = cloud.sh;
 
         outSplat.splats.resize(N);
         for (int32_t i = 0; i < N; ++i)
         {
             VGaussianSplatPoint& p = outSplat.splats[i];
             p.position = glm::vec3(cloud.positions[i * 3 + 0], cloud.positions[i * 3 + 1], cloud.positions[i * 3 + 2]);
-            p.opacity  = cloud.alphas[i]; // raw logit; renderer applies sigmoid
-            p.scale    = glm::vec3(cloud.scales[i * 3 + 0],
-                                cloud.scales[i * 3 + 1],
-                                cloud.scales[i * 3 + 2]); // log-space; renderer applies exp
+            p.opacity  = cloud.alphas[i];
+            p.scale    = glm::vec3(cloud.scales[i * 3 + 0], cloud.scales[i * 3 + 1], cloud.scales[i * 3 + 2]);
             p.pad0     = 0.0f;
-            p.rotation = glm::vec4(cloud.rotations[i * 4 + 0],
-                                   cloud.rotations[i * 4 + 1],
+            p.rotation = glm::vec4(cloud.rotations[i * 4 + 1],
                                    cloud.rotations[i * 4 + 2],
-                                   cloud.rotations[i * 4 + 3]); // xyzw
-            p.shDC     = glm::vec3(cloud.colors[i * 3 + 0],
-                               cloud.colors[i * 3 + 1],
-                               cloud.colors[i * 3 + 2]); // raw SH DC; renderer decodes
+                                   cloud.rotations[i * 4 + 3],
+                                   cloud.rotations[i * 4 + 0]);
+            p.shDC     = glm::vec3(cloud.colors[i * 3 + 0], cloud.colors[i * 3 + 1], cloud.colors[i * 3 + 2]);
             p.pad1     = 0.0f;
         }
 
-        // ── Save cooked asset ────────────────────────────────────────────────────
+        // Save cooked asset.
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, osPath.stem().generic_string(), false);
+            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, assetBaseName, false);
 
         auto sr = saveGaussianSplat(outSplat, importedPath, m_Options.zstdLevel);
         if (!sr)
