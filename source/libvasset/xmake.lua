@@ -68,7 +68,7 @@ if not is_plat("android") then
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
         add_files("src/editor_filesystem.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
-        add_deps("vasset", "miniply", "spz", {public = true})
+        add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", { public = true })
         if is_mode("debug") then
             add_defines("_DEBUG", { public = true })
