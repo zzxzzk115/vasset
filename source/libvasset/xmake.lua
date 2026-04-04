@@ -1,5 +1,5 @@
 add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
-if not is_plat("android") then
+if not is_plat("android") and not is_plat("wasm") then
     add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
 end
 if is_plat("windows") then
@@ -58,7 +58,7 @@ target("vasset")
     add_defines("GLM_FORCE_RADIANS", { public = true })
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/vasset")
 
-if not is_plat("android") then
+if not is_plat("android") and not is_plat("wasm") then
     target("vasset-import")
         set_kind("static")
         if is_plat("android") then
