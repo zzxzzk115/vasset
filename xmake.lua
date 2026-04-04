@@ -14,13 +14,13 @@ set_config("vasset_project_dir", os.scriptdir())
 
 -- global options
 option("vasset_build_examples") -- build examples?
-    set_default(not is_plat("android"))
+    set_default(not is_plat("android") and not is_plat("wasm"))
     set_showmenu(true)
     set_description("Enable vasset examples")
 option_end()
 
 option("vasset_build_tests") -- build tests?
-    set_default(not is_plat("android"))
+    set_default(not is_plat("android") and not is_plat("wasm"))
     set_showmenu(true)
     set_description("Enable vasset tests")
 option_end()
