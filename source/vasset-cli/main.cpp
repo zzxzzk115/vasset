@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <unordered_set>
 
 using namespace vasset;
@@ -39,6 +40,41 @@ namespace
         if (sz)
             f.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(sz));
         return data;
+    }
+
+    std::string normalizePackFilterPath(std::string path)
+    {
+        for (char& ch : path)
+        {
+            if (ch == '\\')
+                ch = '/';
+        }
+
+        while (!path.empty() && path.front() == '/')
+            path.erase(path.begin());
+        while (!path.empty() && path.back() == '/')
+            path.pop_back();
+
+        return path;
+    }
+
+    bool matchesPackFilters(std::string_view logicalPath, const std::vector<std::string>& includePaths)
+    {
+        if (includePaths.empty())
+            return true;
+
+        const std::string normalizedPath = normalizePackFilterPath(std::string(logicalPath));
+        for (const auto& includePath : includePaths)
+        {
+            if (includePath.empty())
+                continue;
+            if (normalizedPath == includePath)
+                return true;
+            if (normalizedPath.size() > includePath.size() && normalizedPath.rfind(includePath, 0) == 0 &&
+                normalizedPath[includePath.size()] == '/')
+                return true;
+        }
+        return false;
     }
 } // namespace
 
@@ -94,6 +130,7 @@ static int cmd_pack(int argc, char** argv)
                      "  - out.vpk: output package\n"
                      "Optional:\n"
                      "  --zstd <level>\n"
+                     "  --include <logical-path-prefix>\n"
                   << std::endl;
         return 1;
     }
@@ -101,7 +138,8 @@ static int cmd_pack(int argc, char** argv)
     std::string assetRoot = argv[1];
     std::string outVpk    = argv[2];
 
-    int zstdLevel = 6;
+    int                      zstdLevel = 6;
+    std::vector<std::string> includePaths;
     for (int i = 3; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -111,6 +149,18 @@ static int cmd_pack(int argc, char** argv)
             std::cout << "Using zstd compression level: " << zstdLevel << std::endl;
             ++i;
         }
+        else if (a == "--include" && i + 1 < argc)
+        {
+            includePaths.push_back(normalizePackFilterPath(argv[i + 1]));
+            ++i;
+        }
+    }
+
+    if (!includePaths.empty())
+    {
+        std::cout << "Applying pack include filters:" << std::endl;
+        for (const auto& includePath : includePaths)
+            std::cout << "  - " << includePath << std::endl;
     }
 
     namespace fs = std::filesystem;
@@ -127,6 +177,8 @@ static int cmd_pack(int argc, char** argv)
         {
             const std::string logicalPath = packLogicalPathForEntry(entry);
             if (logicalPath.empty())
+                continue;
+            if (!matchesPackFilters(logicalPath, includePaths))
                 continue;
 
             const std::string      filePath = (fs::path(assetRoot) / packDataPathForEntry(entry)).generic_string();
@@ -191,6 +243,8 @@ static int cmd_pack(int argc, char** argv)
         }
 
         importedSourcePaths.insert(vi.value().source);
+        if (!matchesPackFilters(vi.value().source, includePaths))
+            continue;
 
         // Read cooked bytes from output path
         const std::string      outPath = (fs::path(assetRoot) / vi.value().output).generic_string();
@@ -231,6 +285,8 @@ static int cmd_pack(int argc, char** argv)
 
         if (importedSourcePaths.contains(relPath))
             continue;
+        if (!matchesPackFilters(relPath, includePaths))
+            continue;
 
         std::vector<std::byte> data = readBinaryFile(p);
         if (data.empty() && !fs::exists(p))
@@ -270,11 +326,11 @@ int main(int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::cout <<
+    std::cout <<
             R"(Usage:
 
     vasset-cli import <asset-root>
-    vasset-cli pack <asset-root> <out.vpk> [--zstd N]
+    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path]
 )" << std::endl;
         return 1;
     }
