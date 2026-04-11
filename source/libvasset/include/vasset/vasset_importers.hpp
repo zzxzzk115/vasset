@@ -31,6 +31,12 @@ namespace vasset
             uint32_t qualityLevel {255};    // 1-255
             uint32_t compressionLevel {2};  // 0-4
             uint32_t basisUThreadCount {0}; // 0 = auto-detect
+
+            // By default, only large source textures pay the BasisU encode cost.
+            // Smaller images are still emitted as KTX2, but remain uncompressed.
+            bool     compressOnlyLargeTextures {true};
+            uint32_t basisUCompressMinDimension {2048};
+            uint64_t basisUCompressMinSourceBytes {2ULL * 1024ULL * 1024ULL};
         };
 
         VTextureImporter(VAssetRegistry& registry);

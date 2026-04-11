@@ -31,12 +31,25 @@ namespace vasset
         if (!uuid.valid())
             return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
 
+        const std::string uuidKey(vbase::to_string(uuid));
+        const std::string sourcePathStr(sourcePath);
+
+        // Keep source_path unique in the registry so reimports can safely migrate
+        // imported paths without leaving duplicate rows behind.
+        for (auto it = m_Registry.begin(); it != m_Registry.end();)
+        {
+            if (it->first != uuidKey && it->second.sourcePath == sourcePathStr)
+                it = m_Registry.erase(it);
+            else
+                ++it;
+        }
+
         AssetEntry e;
-        e.sourcePath   = std::string(sourcePath);
+        e.sourcePath   = sourcePathStr;
         e.importedPath = std::string(importedPath);
         e.type         = type;
 
-        m_Registry[vbase::to_string(uuid)] = std::move(e);
+        m_Registry[uuidKey] = std::move(e);
         return vbase::Result<void, AssetError>::ok();
     }
 
