@@ -1,0 +1,220 @@
+name: Release Prebuilt
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-prebuilt:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            plat: linux
+            arch: x86_64
+            artifact_suffix: linux-x86_64
+            android: false
+            desktop: true
+          - os: windows-latest
+            plat: windows
+            arch: x64
+            vs: "2022"
+            vs_toolset: "14.29"
+            artifact_suffix: windows-x64
+            android: false
+            desktop: true
+          - os: macos-latest
+            plat: macosx
+            arch: arm64
+            artifact_suffix: macosx-arm64
+            android: false
+            desktop: true
+          - os: ubuntu-latest
+            plat: android
+            arch: arm64-v8a
+            artifact_suffix: android-arm64-v8a
+            android: true
+            desktop: false
+          - os: ubuntu-latest
+            plat: android
+            arch: armeabi-v7a
+            artifact_suffix: android-armeabi-v7a
+            android: true
+            desktop: false
+          - os: ubuntu-latest
+            plat: android
+            arch: x86_64
+            artifact_suffix: android-x86_64
+            android: true
+            desktop: false
+          - os: ubuntu-latest
+            plat: wasm
+            arch: wasm32
+            artifact_suffix: wasm-wasm32
+            android: false
+            desktop: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+          actions-cache-folder: ".xmake-cache"
+          build-cache: true
+
+      - name: Setup MSVC Dev Cmd (Windows)
+        if: ${{ matrix.plat == 'windows' }}
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: ${{ matrix.vs_toolset }}
+
+      - name: Print MSVC Environment (Windows)
+        if: ${{ matrix.plat == 'windows' }}
+        shell: pwsh
+        run: |
+          Write-Host "Target arch: ${{ matrix.arch }}"
+          Write-Host "Toolset: ${{ matrix.vs_toolset }}"
+          $clCmd = Get-Command cl -ErrorAction Stop
+          Write-Host "cl path: $($clCmd.Source)"
+          $clVersion = (& cl /? 2>&1 | Select-String -Pattern "Compiler Version" | Select-Object -First 1)
+          if ($clVersion) { Write-Host "cl version: $($clVersion.Line.Trim())" }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $installPath = & $vswhere -latest -products * -property installationPath
+            if ($installPath) {
+              $msvcRoot = Join-Path $installPath "VC\Tools\MSVC"
+              if (Test-Path $msvcRoot) {
+                Get-ChildItem -Path $msvcRoot -Directory | Sort-Object Name | ForEach-Object { Write-Host "MSVC dir: $($_.Name)" }
+              }
+            }
+          }
+
+      - name: Install Linux Dependencies
+        if: ${{ matrix.plat == 'linux' }}
+        run: sudo apt-get update && sudo apt-get install build-essential cmake git clang libx11-dev -y
+
+      - name: Setup Android SDK
+        if: matrix.android
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Emscripten SDK
+        if: ${{ matrix.plat == 'wasm' }}
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Install Android Dependencies
+        if: matrix.android
+        run: sudo apt-get update && sudo apt-get install build-essential cmake git clang ninja-build -y
+
+      - name: Install WASM Dependencies
+        if: ${{ matrix.plat == 'wasm' }}
+        run: sudo apt-get update && sudo apt-get install build-essential cmake git clang ninja-build python3 -y
+
+      - name: Install Android NDK
+        if: matrix.android
+        run: sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" "ndk;30.0.14904198"
+
+      - name: Verify Android NDK Path
+        if: matrix.android
+        run: |
+          test -d "${ANDROID_SDK_ROOT}/ndk/30.0.14904198"
+          test -d "${ANDROID_SDK_ROOT}/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls -la "${ANDROID_SDK_ROOT}/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+      - name: Configure (Windows)
+        if: ${{ matrix.plat == 'windows' }}
+        run: xmake f -m release -p windows -a ${{ matrix.arch }} --vs=${{ matrix.vs }} --vs_toolset=${{ matrix.vs_toolset }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Configure (Linux)
+        if: ${{ matrix.plat == 'linux' }}
+        run: xmake f -m release -p linux -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Configure (macOS)
+        if: ${{ matrix.plat == 'macosx' }}
+        run: xmake f -m release -p macosx -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Configure (Android)
+        if: matrix.android
+        run: xmake f -m release -p android -a ${{ matrix.arch }} --ndk="${ANDROID_SDK_ROOT}/ndk/30.0.14904198" --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Configure (WASM)
+        if: ${{ matrix.plat == 'wasm' }}
+        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Build
+        run: xmake repo -u && xmake -vD -y
+
+      - name: Install Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf prebuilt/install
+          xmake install -o prebuilt/install
+          if [ "${{ matrix.desktop }}" = "true" ]; then
+            xmake install -o prebuilt/install GaussForge
+            xmake install -o prebuilt/install spz
+          fi
+
+      - name: Package Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name || inputs.tag }}"
+          STAGE="prebuilt/vasset-prebuilt-${VERSION}-${{ matrix.artifact_suffix }}"
+          mkdir -p "${STAGE}"
+
+          cp -R prebuilt/install/* "${STAGE}/"
+          cp LICENSE "${STAGE}/LICENSE"
+          cp README.md "${STAGE}/README.md"
+
+          cmake -E tar cfv "prebuilt/vasset-prebuilt-${VERSION}-${{ matrix.artifact_suffix }}.zip" --format=zip "${STAGE}"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-${{ matrix.artifact_suffix }}
+          path: prebuilt/*.zip
+
+      - name: Show install error log
+        if: failure() && matrix.os != 'windows-latest'
+        run: |
+          find /home/runner/.xmake/cache -name install.txt -exec echo "==== {} ====" \; -exec cat {} \;
+
+      - name: Show install error log (Windows)
+        if: failure() && matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          find /c/Users/runneradmin/.xmake/cache -name install.txt -exec echo "==== {} ====" \; -exec cat {} \;
+
+  upload-release-assets:
+    needs: build-prebuilt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download All Zips
+        uses: actions/download-artifact@v4
+        with:
+          path: prebuilt_assets
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
+          files: prebuilt_assets/**/*.zip

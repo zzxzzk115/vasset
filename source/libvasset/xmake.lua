@@ -9,25 +9,25 @@ else
 end
 
 local runtime_headers = {
-    "include/vasset/asset_error.hpp",
-    "include/vasset/uuid_resolver.hpp",
-    "include/vasset/vasset_registry.hpp",
-    "include/vasset/vasset_runtime.hpp",
-    "include/vasset/vasset_type.hpp",
-    "include/vasset/vgaussiansplat.hpp",
-    "include/vasset/vmaterial.hpp",
-    "include/vasset/vmesh.hpp",
-    "include/vasset/vpk.hpp",
-    "include/vasset/vtexture.hpp",
-    "include/vasset/vvertex.hpp",
+    "include/(vasset/asset_error.hpp)",
+    "include/(vasset/uuid_resolver.hpp)",
+    "include/(vasset/vasset_registry.hpp)",
+    "include/(vasset/vasset_runtime.hpp)",
+    "include/(vasset/vasset_type.hpp)",
+    "include/(vasset/vgaussiansplat.hpp)",
+    "include/(vasset/vmaterial.hpp)",
+    "include/(vasset/vmesh.hpp)",
+    "include/(vasset/vpk.hpp)",
+    "include/(vasset/vtexture.hpp)",
+    "include/(vasset/vvertex.hpp)",
 }
 
 local import_headers = {
-    "include/vasset/editor_filesystem.hpp",
-    "include/vasset/vasset.hpp",
-    "include/vasset/vasset_import.hpp",
-    "include/vasset/vasset_importers.hpp",
-    "include/vasset/vimport.hpp",
+    "include/(vasset/editor_filesystem.hpp)",
+    "include/(vasset/vasset.hpp)",
+    "include/(vasset/vasset_import.hpp)",
+    "include/(vasset/vasset_importers.hpp)",
+    "include/(vasset/vimport.hpp)",
 }
 
 -- target definition, name: vasset

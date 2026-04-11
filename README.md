@@ -5,12 +5,18 @@
 </h4>
 
 <p align="center">
+    <a href="https://github.com/zzxzzk115/vasset/releases/latest" alt="Latest Release">
+        <img src="https://img.shields.io/github/release/zzxzzk115/vasset?include_prereleases=&sort=semver&color=blue" /></a>
     <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-Windows">
         <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_windows.yaml?branch=master&label=Build-Windows&logo=github" /></a>
     <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-Linux">
         <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_linux.yaml?branch=master&label=Build-Linux&logo=github" /></a>
     <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-macOS">
         <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_macos.yaml?branch=master&label=Build-macOS&logo=github" /></a>
+    <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-Android">
+        <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_android.yaml?branch=master&label=Build-Android&logo=github" /></a>
+    <a href="https://github.com/zzxzzk115/vasset/actions" alt="Build-WASM">
+        <img src="https://img.shields.io/github/actions/workflow/status/zzxzzk115/vasset/build_wasm.yaml?branch=master&label=Build-WASM&logo=github" /></a>
     <a href="https://github.com/zzxzzk115/vasset/issues" alt="GitHub Issues">
         <img src="https://img.shields.io/github/issues/zzxzzk115/vasset"></a>
     <a href="https://www.codefactor.io/repository/github/zzxzzk115/vasset"><img src="https://www.codefactor.io/repository/github/zzxzzk115/vasset/badge" alt="CodeFactor" /></a>
@@ -26,6 +32,14 @@
 - Asset packer: Pack assets into a single VPK file
 - VPK filesystem: Mount VPK file with Virtual File System (from [vfilesystem](https://github.com/zzxzzk115/vfilesystem)) and load assets with URI based string
 - Library & CLI: `vasset` and `vasset-cli` can be integrated into engines
+
+## Prebuilt Releases
+
+Tagged releases publish prebuilt bundles on [GitHub Releases](https://github.com/zzxzzk115/vasset/releases).
+
+- Desktop bundles currently stage `vbase`, `vfilesystem`, `vasset`, `vasset-import`, and `vasset-cli`
+- Android / WASM bundles currently stage the runtime stack: `vbase`, `vfilesystem`, and `vasset`
+- These bundles are project-focused prebuilds rather than a fully vendored SDK, so compile-time third-party dependencies such as `glm` and `assimp` are still expected to come from your own toolchain or package manager
 
 ## CLI Usage
 
