@@ -1,3 +1,5 @@
+add_requires("zlib")
+
 target("dds-ktx")
     -- https://xmake.io/zh/api/description/project-target.html#headeronly
     set_kind("headeronly")
