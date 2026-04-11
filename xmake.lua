@@ -25,6 +25,12 @@ option("vasset_build_tests") -- build tests?
     set_description("Enable vasset tests")
 option_end()
 
+option("vasset_enable_wasm_import") -- build import pipeline for wasm?
+    set_default(not is_plat("android"))
+    set_showmenu(true)
+    set_description("Enable vasset-import on wasm builds (enabled by default)")
+option_end()
+
 -- if build on windows
 if is_plat("windows") then
     add_cxxflags("/Zc:__cplusplus", {tools = {"msvc", "cl"}}) -- fix __cplusplus == 199711L error

@@ -41,6 +41,33 @@
 
 namespace
 {
+    std::string assetErrorLabel(vasset::AssetError error)
+    {
+        switch (error)
+        {
+            case vasset::AssetError::eOk:
+                return "ok";
+            case vasset::AssetError::eNotFound:
+                return "not_found";
+            case vasset::AssetError::eInvalidFormat:
+                return "invalid_format";
+            case vasset::AssetError::eInvalidImportFile:
+                return "invalid_import_file";
+            case vasset::AssetError::eUnknownImporter:
+                return "unknown_importer";
+            case vasset::AssetError::eImportFailed:
+                return "import_failed";
+            case vasset::AssetError::eIOError:
+                return "io_error";
+            case vasset::AssetError::eNotSupported:
+                return "not_supported";
+            case vasset::AssetError::eOutOfMemory:
+                return "out_of_memory";
+            default:
+                return "unknown_error";
+        }
+    }
+
     bool isEXR(vbase::StringView ext) { return ext == ".exr"; }
 
     bool isSTB(vbase::StringView ext)
@@ -242,6 +269,21 @@ namespace
         return path.stem().generic_string();
     }
 
+    std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, bool keepExtension = false)
+    {
+        std::filesystem::path keyPath {std::string(relativeSourcePath)};
+        if (!keepExtension)
+            keyPath.replace_extension();
+        return keyPath.generic_string();
+    }
+
+    std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, vbase::StringView assetBaseName)
+    {
+        std::filesystem::path keyPath {std::string(relativeSourcePath)};
+        keyPath.replace_filename(std::string(assetBaseName));
+        return keyPath.generic_string();
+    }
+
     vasset::VAssetType inferSourceTextAssetType(const std::string& ext)
     {
         if (ext == ".vscn")
@@ -266,8 +308,8 @@ namespace
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
 
         const std::string relativeSrcPath      = registry.getSourceAssetPath(osPath.generic_string(), true);
-        const std::string relativeImportedPath = registry.getImportedAssetPath(
-            type, osPath.stem().generic_string() + osPath.extension().generic_string(), true);
+        const std::string relativeImportedPath =
+            registry.getImportedAssetPath(type, importedAssetKeyFromRelativeSource(relativeSrcPath, true), true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = registry.lookup(lookupUUID);
@@ -500,7 +542,7 @@ namespace vasset
         // ------------------------------------------------------------
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().generic_string(), true);
+            m_Registry.getImportedAssetPath(VAssetType::eTexture, importedAssetKeyFromRelativeSource(relativeSrcPath), true);
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto       entry      = m_Registry.lookup(lookupUUID);
@@ -670,6 +712,8 @@ namespace vasset
             auto srcSize = hdr ? width * height * channels * sizeof(float) : width * height * channels;
 
             auto targetTextureFormat = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
+            std::error_code fileSizeEc;
+            const auto      sourceFileBytes = std::filesystem::file_size(osPath, fileSizeEc);
 
             if (targetFormat == VTextureFileFormat::eKTX || targetFormat == VTextureFileFormat::eDDS)
             {
@@ -809,9 +853,32 @@ namespace vasset
             }
 
             // ---------- BasisU Compression ----------
-            // BasisU compressors expect 8-bit LDR input. Skip compression for HDR/float images
-            // and add diagnostic logging on failure to help debugging.
-            if (!hdr)
+            // BasisU compressors expect 8-bit LDR input. Skip compression for HDR/float images.
+            // For KTX2 output we also avoid paying the encode cost for smaller source textures:
+            // they still end up as KTX2, just without BasisU supercompression.
+            bool shouldCompressWithBasisU = !hdr;
+            if (shouldCompressWithBasisU && m_Options.compressOnlyLargeTextures)
+            {
+                const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
+                const bool     largeEnoughResolution = longestEdge >= m_Options.basisUCompressMinDimension;
+                const bool     largeEnoughSourceSize =
+                    !fileSizeEc && sourceFileBytes >= m_Options.basisUCompressMinSourceBytes;
+                shouldCompressWithBasisU = largeEnoughResolution && largeEnoughSourceSize;
+
+                if (!shouldCompressWithBasisU)
+                {
+                    std::cout << "Skipping BasisU compression for small texture (" << osPath.filename().generic_string()
+                              << ", longestEdge=" << longestEdge << ", sourceBytes=";
+                    if (fileSizeEc)
+                        std::cout << "unknown";
+                    else
+                        std::cout << sourceFileBytes;
+                    std::cout << ", thresholds=" << m_Options.basisUCompressMinDimension << "px/"
+                              << m_Options.basisUCompressMinSourceBytes << "B)" << std::endl;
+                }
+            }
+
+            if (shouldCompressWithBasisU)
             {
                 ktxBasisParams params {};
                 params.structSize       = sizeof(ktxBasisParams);
@@ -845,8 +912,11 @@ namespace vasset
             }
             else
             {
-                std::cout << "Skipping BasisU compression for HDR/float texture (vkFormat=" << ci.vkFormat << ")"
-                          << std::endl;
+                if (hdr)
+                {
+                    std::cout << "Skipping BasisU compression for HDR/float texture (vkFormat=" << ci.vkFormat << ")"
+                              << std::endl;
+                }
             }
 
             // ---------- Write to memory ----------
@@ -873,7 +943,7 @@ namespace vasset
 
     SUCCESS:
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eTexture, osPath.stem().generic_string(), false);
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
 
         auto sr_tex = saveTexture(outTexture, importedPath);
         if (!sr_tex)
@@ -919,7 +989,7 @@ namespace vasset
         // Check registry
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().generic_string(), true);
+            m_Registry.getImportedAssetPath(VAssetType::eMesh, importedAssetKeyFromRelativeSource(relativeSrcPath), true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -973,7 +1043,7 @@ namespace vasset
         // Note: Joint indices and weights would require additional processing, e.g., from bones
 
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eMesh, osPath.stem().generic_string(), false);
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
 
         auto sr_mesh = saveMesh(outMesh, importedPath, 3);
         if (!sr_mesh)
@@ -1566,7 +1636,8 @@ namespace vasset
         const std::string assetBaseName   = gaussianSplatAssetBaseName(osPath);
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, assetBaseName, true);
+            m_Registry.getImportedAssetPath(
+                VAssetType::eGaussianSplat, importedAssetKeyFromRelativeSource(relativeSrcPath, assetBaseName), true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -1631,7 +1702,7 @@ namespace vasset
 
         // Save cooked asset.
         const std::string importedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eGaussianSplat, assetBaseName, false);
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
 
         auto sr = saveGaussianSplat(outSplat, importedPath, m_Options.zstdLevel);
         if (!sr)
@@ -1669,46 +1740,89 @@ namespace vasset
         if (!std::filesystem::exists(osPath) || !std::filesystem::is_directory(osPath))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
+        size_t scannedRegularFiles = 0;
+        size_t skippedFiles        = 0;
+        size_t importedTextures    = 0;
+        size_t importedMeshes      = 0;
+        size_t importedSplats      = 0;
+        size_t importedTextAssets  = 0;
+
+        std::cout << "[vasset] scanning asset folder: " << osPath.generic_string() << std::endl;
+
         for (const auto& entry : std::filesystem::recursive_directory_iterator(osPath))
         {
             if (!entry.is_regular_file())
                 continue;
-
             const std::string filePath = entry.path().generic_string();
             const std::string relPath  = std::filesystem::relative(entry.path(), osPath).generic_string();
             if (relPath == "imported" || relPath.rfind("imported/", 0) == 0)
                 continue;
             const std::string ext = entry.path().extension().generic_string();
+            if (ext == ".vimport")
+                continue;
+            ++scannedRegularFiles;
 
             if (isValidTexture(ext))
             {
+                std::cout << "[vasset] texture  : " << relPath << std::endl;
                 VTexture texture;
                 auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
                 if (!tr)
+                {
+                    std::cerr << "[vasset] failed texture  : " << relPath << " (" << assetErrorLabel(tr.error())
+                              << ")" << std::endl;
                     return vbase::Result<void, AssetError>::err(tr.error());
+                }
+                ++importedTextures;
             }
             else if (isValidModel(ext))
             {
+                std::cout << "[vasset] mesh     : " << relPath << std::endl;
                 VMesh mesh;
                 auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
                 if (!mr)
+                {
+                    std::cerr << "[vasset] failed mesh     : " << relPath << " (" << assetErrorLabel(mr.error())
+                              << ")" << std::endl;
                     return vbase::Result<void, AssetError>::err(mr.error());
+                }
+                ++importedMeshes;
             }
             else if (isValidGaussianSplat(ext))
             {
+                std::cout << "[vasset] splat    : " << relPath << std::endl;
                 VGaussianSplat splat;
                 auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
                 if (!gr)
+                {
+                    std::cerr << "[vasset] failed splat    : " << relPath << " (" << assetErrorLabel(gr.error())
+                              << ")" << std::endl;
                     return vbase::Result<void, AssetError>::err(gr.error());
+                }
+                ++importedSplats;
             }
             else if (isValidSourceTextAsset(ext))
             {
+                std::cout << "[vasset] text     : " << relPath << std::endl;
                 auto type = inferSourceTextAssetType(ext);
                 auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
                 if (!rr)
+                {
+                    std::cerr << "[vasset] failed text     : " << relPath << " (" << assetErrorLabel(rr.error())
+                              << ")" << std::endl;
                     return vbase::Result<void, AssetError>::err(rr.error());
+                }
+                ++importedTextAssets;
+            }
+            else
+            {
+                ++skippedFiles;
             }
         }
+
+        std::cout << "[vasset] summary  : scanned=" << scannedRegularFiles << ", textures=" << importedTextures
+                  << ", meshes=" << importedMeshes << ", splats=" << importedSplats
+                  << ", text_assets=" << importedTextAssets << ", skipped=" << skippedFiles << std::endl;
 
         return vbase::Result<void, AssetError>::ok();
     }
