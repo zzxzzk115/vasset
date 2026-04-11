@@ -1,4 +1,4 @@
-name: Build Linux
+name: Build WASM
 
 on:
   push:
@@ -17,14 +17,22 @@ jobs:
       - uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: latest
-          actions-cache-folder: '.xmake-cache'
+          actions-cache-folder: ".xmake-cache"
           build-cache: true
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install build-essential cmake git clang libx11-dev -y
+      - name: Setup Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
 
-      - name: Configure
-        run: xmake f -m release -p linux --vasset_build_examples=y --vasset_build_tests=y --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install build-essential cmake git clang ninja-build python3 -y
+
+      - name: Configure WASM Build
+        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+
+      - name: Show Targets
+        run: xmake show -l targets
 
       - name: Build
         run: xmake repo -u && xmake -vD -y
