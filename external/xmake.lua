@@ -20,7 +20,7 @@ target("spz")
     add_headerfiles("spz/**.h")
     add_includedirs("spz/src/cc", {public = true}) -- public: let other targets to auto include
     add_files("spz/**.cc")
-    add_packages("zlib")
+    add_packages("zlib", {public = true})
 
 target("GaussForge")
     set_kind("static")

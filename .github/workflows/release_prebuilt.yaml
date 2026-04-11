@@ -29,7 +29,6 @@ jobs:
             plat: windows
             arch: x64
             vs: "2022"
-            vs_toolset: "14.29"
             artifact_suffix: windows-x64
             android: false
             desktop: true
@@ -82,14 +81,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-          toolset: ${{ matrix.vs_toolset }}
 
       - name: Print MSVC Environment (Windows)
         if: ${{ matrix.plat == 'windows' }}
         shell: pwsh
         run: |
           Write-Host "Target arch: ${{ matrix.arch }}"
-          Write-Host "Toolset: ${{ matrix.vs_toolset }}"
+          Write-Host "Toolset: default (latest available in VS2022 image)"
           $clCmd = Get-Command cl -ErrorAction Stop
           Write-Host "cl path: $($clCmd.Source)"
           $clVersion = (& cl /? 2>&1 | Select-String -Pattern "Compiler Version" | Select-Object -First 1)
@@ -140,7 +138,7 @@ jobs:
 
       - name: Configure (Windows)
         if: ${{ matrix.plat == 'windows' }}
-        run: xmake f -m release -p windows -a ${{ matrix.arch }} --vs=${{ matrix.vs }} --vs_toolset=${{ matrix.vs_toolset }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p windows -a ${{ matrix.arch }} --vs=${{ matrix.vs }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
 
       - name: Configure (Linux)
         if: ${{ matrix.plat == 'linux' }}

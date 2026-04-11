@@ -1,6 +1,9 @@
 add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
 if not is_plat("android") and not is_plat("wasm") then
     add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = true}})
+    if is_plat("linux") then
+        add_requires("zlib")
+    end
 end
 if is_plat("windows") then
     add_requires("ktx-windows")
@@ -70,6 +73,14 @@ if not is_plat("android") and not is_plat("wasm") then
         add_files("src/editor_filesystem.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", { public = true })
+        if is_plat("linux") then
+            -- Some Linux assimp shared-package builds do not propagate zlib strongly enough for
+            -- downstream executables, so link it explicitly on the importer target as well.
+            add_packages("zlib", { public = true })
+            -- GNU ld on Linux can drop DSOs needed only by shared-library dependencies when
+            -- --as-needed is active, which shows up as "DSO missing from command line".
+            add_ldflags("-Wl,--no-as-needed", { public = true })
+        end
         if is_mode("debug") then
             add_defines("_DEBUG", { public = true })
         else

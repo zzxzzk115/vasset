@@ -20,16 +20,15 @@ jobs:
           actions-cache-folder: '.xmake-cache'
           build-cache: true
 
-      - name: Setup MSVC Dev Cmd (v142)
+      - name: Setup MSVC Dev Cmd
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-          toolset: 14.29
 
       - name: Print MSVC Environment
         shell: pwsh
         run: |
-          Write-Host "Toolset: 14.29"
+          Write-Host "Toolset: default (latest available in VS2022 image)"
           $clCmd = Get-Command cl -ErrorAction Stop
           Write-Host "cl path: $($clCmd.Source)"
           $clVersion = (& cl /? 2>&1 | Select-String -Pattern "Compiler Version" | Select-Object -First 1)
@@ -46,7 +45,7 @@ jobs:
           }
 
       - name: Configure
-        run: xmake f -m release -p windows -a x64 --vs=2022 --vs_toolset=14.29 --vasset_build_examples=y --vasset_build_tests=y --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p windows -a x64 --vs=2022 --vasset_build_examples=y --vasset_build_tests=y --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
 
       - name: Build
         shell: pwsh
