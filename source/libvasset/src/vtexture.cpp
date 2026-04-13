@@ -3,6 +3,7 @@
 
 #include <vbase/core/result.hpp>
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -52,6 +53,9 @@ namespace vasset
         // 4 bytes for file format
         file.write(reinterpret_cast<const char*>(&texture.fileFormat), sizeof(texture.fileFormat));
 
+        // 1 byte for compressedBasisU
+        file.write(reinterpret_cast<const char*>(&texture.compressedBasisU), sizeof(texture.compressedBasisU));
+
         // 4 bytes for data size
         uint32_t dataSize = static_cast<uint32_t>(texture.data.size());
         file.write(reinterpret_cast<const char*>(&dataSize), sizeof(dataSize));
@@ -88,7 +92,10 @@ namespace vasset
 
     vbase::Result<void, AssetError> loadTextureFromMemory(const std::vector<std::byte>& data, VTexture& outTexture)
     {
-        if (data.size() < 16 + 16 + 4 * 9) // minimum size check (magic + uuid + 9 uint32 fields)
+        constexpr size_t kVTextureMinSize =
+            16 + sizeof(vbase::UUID) + sizeof(bool) * 2 + sizeof(uint32_t) * 9; // magic + fields + dataSize
+
+        if (data.size() < kVTextureMinSize)
             return vbase::Result<void, AssetError>::err(AssetError::eIOError);
 
         size_t offset = 0;
@@ -137,6 +144,9 @@ namespace vasset
 
         // 4 bytes for file format
         readSafe(&outTexture.fileFormat, sizeof(outTexture.fileFormat));
+
+        // 1 byte for compressedBasisU
+        readSafe(&outTexture.compressedBasisU, sizeof(outTexture.compressedBasisU));
 
         // 4 bytes for data size
         uint32_t dataSize = 0;

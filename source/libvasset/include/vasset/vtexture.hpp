@@ -116,6 +116,7 @@ namespace vasset
         VTextureDimension    type {VTextureDimension::e2D};
         VTextureFormat       format {VTextureFormat::eRGBA8};
         VTextureFileFormat   fileFormat {VTextureFileFormat::ePNG};
+        bool                 compressedBasisU {false}; // true when KTX2 payload needs BasisU transcoding
         std::vector<uint8_t> data; // image data, could be compressed (KTX2) or raw (PNG, JPG, HDR)
 
         std::string toString() const
@@ -127,6 +128,7 @@ namespace vasset
                    ", type: " + std::to_string(static_cast<uint32_t>(type)) +
                    ", format: " + std::to_string(static_cast<uint32_t>(format)) +
                    ", fileFormat: " + std::to_string(static_cast<uint32_t>(fileFormat)) +
+                   ", compressedBasisU: " + std::to_string(compressedBasisU) +
                    ", dataSize: " + std::to_string(data.size()) + " }";
         }
     };

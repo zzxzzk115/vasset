@@ -598,6 +598,7 @@ namespace vasset
             outTexture.type        = VTextureDimension::e2D;
             outTexture.format      = toVTextureFormat(tc.format);
             outTexture.fileFormat  = (ext == ".ktx") ? VTextureFileFormat::eKTX : VTextureFileFormat::eDDS;
+            outTexture.compressedBasisU = false;
 
             outTexture.data.assign(fileBytes.begin(), fileBytes.end());
 
@@ -637,7 +638,9 @@ namespace vasset
             outTexture.isCubemap   = kTexture->numFaces == 6;
             outTexture.type        = static_cast<VTextureDimension>(kTexture->numDimensions);
 
-            outTexture.format = static_cast<VTextureFormat>(kTexture->vkFormat);
+            outTexture.format           = static_cast<VTextureFormat>(kTexture->vkFormat);
+            outTexture.fileFormat       = VTextureFileFormat::eKTX2;
+            outTexture.compressedBasisU = ktxTexture2_NeedsTranscoding(kTexture) != 0;
 
             outTexture.data.assign(bytes.begin(), bytes.end());
 
@@ -738,6 +741,7 @@ namespace vasset
                 outTexture.type        = VTextureDimension::e2D;
                 outTexture.format      = targetTextureFormat;
                 outTexture.fileFormat  = targetFormat;
+                outTexture.compressedBasisU = false;
 
                 outTexture.data.assign(fileBytes.begin(), fileBytes.end());
 
@@ -937,6 +941,7 @@ namespace vasset
             outTexture.type        = static_cast<VTextureDimension>(ci.numDimensions);
             outTexture.format      = targetTextureFormat;
             outTexture.fileFormat  = VTextureFileFormat::eKTX2;
+            outTexture.compressedBasisU = ktxTexture2_NeedsTranscoding(ktxGuard.p) != 0;
 
             outTexture.data.assign(mem, mem + size);
         }
