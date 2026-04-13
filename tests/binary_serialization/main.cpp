@@ -72,6 +72,7 @@ TEST(TextureSerialization, BasicSerialization)
     texture.height     = 256;
     texture.format     = VTextureFormat::eRGBA8;
     texture.fileFormat = VTextureFileFormat::ePNG;
+    texture.compressedBasisU = true;
 
     // Fill with dummy data
     texture.data.resize(texture.width * texture.height * 4, 255);
@@ -91,6 +92,7 @@ TEST(TextureSerialization, BasicSerialization)
     ASSERT_EQ(loadedTexture.height, texture.height);
     ASSERT_EQ(loadedTexture.format, texture.format);
     ASSERT_EQ(loadedTexture.fileFormat, texture.fileFormat);
+    ASSERT_EQ(loadedTexture.compressedBasisU, texture.compressedBasisU);
     ASSERT_EQ(loadedTexture.data, texture.data);
 }
 
