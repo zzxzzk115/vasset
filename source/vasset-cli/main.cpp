@@ -4,6 +4,7 @@
 #include <vasset/vtexture.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -81,6 +82,17 @@ namespace
                 return true;
         }
         return false;
+    }
+
+    bool isRuntimeRawAssetPath(const std::string& relPath)
+    {
+        std::filesystem::path p(relPath);
+        std::string           ext = p.extension().generic_string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
+        return ext == ".vscn" || ext == ".vmanifest" || ext == ".lua";
     }
 
     bool validateTexturePayloadForPack(std::string_view              cookedPath,
@@ -641,6 +653,9 @@ static int cmd_pack(int argc, char** argv)
             continue;
 
         if (relPath.size() >= 4 && relPath.substr(relPath.size() - 4) == ".vpk")
+            continue;
+
+        if (!isRuntimeRawAssetPath(relPath))
             continue;
 
         if (importedSourcePaths.contains(relPath))
