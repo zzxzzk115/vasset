@@ -87,6 +87,31 @@ namespace
 
     bool isValidTexture(vbase::StringView ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
 
+    vasset::VTextureFileFormat textureFileFormatFromExtension(vbase::StringView ext)
+    {
+        if (ext == ".jpg")
+            return vasset::VTextureFileFormat::eJPG;
+        if (ext == ".jpeg")
+            return vasset::VTextureFileFormat::eJPEG;
+        if (ext == ".png")
+            return vasset::VTextureFileFormat::ePNG;
+        if (ext == ".tga")
+            return vasset::VTextureFileFormat::eTGA;
+        if (ext == ".bmp")
+            return vasset::VTextureFileFormat::eBMP;
+        if (ext == ".psd")
+            return vasset::VTextureFileFormat::ePSD;
+        if (ext == ".gif")
+            return vasset::VTextureFileFormat::eGIF;
+        if (ext == ".hdr")
+            return vasset::VTextureFileFormat::eHDR;
+        if (ext == ".pic")
+            return vasset::VTextureFileFormat::ePIC;
+        if (ext == ".exr")
+            return vasset::VTextureFileFormat::eEXR;
+        return vasset::VTextureFileFormat::eUnknown;
+    }
+
     bool isValidModel(vbase::StringView ext)
     {
         return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
@@ -769,6 +794,36 @@ namespace vasset
                 targetFormat = VTextureFileFormat::eKTX2;
             }
 
+            bool shouldCompressWithBasisU = false;
+            if (targetFormat == VTextureFileFormat::eKTX2 && !hdr)
+            {
+                shouldCompressWithBasisU = true;
+                if (m_Options.compressOnlyLargeTextures)
+                {
+                    const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
+                    const bool     largeEnoughResolution = longestEdge >= m_Options.basisUCompressMinDimension;
+                    const bool     largeEnoughSourceSize =
+                        !fileSizeEc && sourceFileBytes >= m_Options.basisUCompressMinSourceBytes;
+                    shouldCompressWithBasisU = largeEnoughResolution && largeEnoughSourceSize;
+
+                    if (!shouldCompressWithBasisU)
+                    {
+                        std::cout << "Keeping original encoded payload for small texture ("
+                                  << osPath.filename().generic_string() << ", longestEdge=" << longestEdge
+                                  << ", sourceBytes=";
+                        if (fileSizeEc)
+                            std::cout << "unknown";
+                        else
+                            std::cout << sourceFileBytes;
+                        std::cout << ", thresholds=" << m_Options.basisUCompressMinDimension << "px/"
+                                  << m_Options.basisUCompressMinSourceBytes << "B)" << std::endl;
+                    }
+                }
+
+                if (!shouldCompressWithBasisU)
+                    targetFormat = textureFileFormatFromExtension(ext);
+            }
+
             // ---------- Not KTX2: direct store ----------
             if (targetFormat != VTextureFileFormat::eKTX2)
             {
@@ -899,31 +954,6 @@ namespace vasset
             }
 
             // ---------- BasisU Compression ----------
-            // BasisU compressors expect 8-bit LDR input. Skip compression for HDR/float images.
-            // For KTX2 output we also avoid paying the encode cost for smaller source textures:
-            // they still end up as KTX2, just without BasisU supercompression.
-            bool shouldCompressWithBasisU = !hdr;
-            if (shouldCompressWithBasisU && m_Options.compressOnlyLargeTextures)
-            {
-                const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
-                const bool     largeEnoughResolution = longestEdge >= m_Options.basisUCompressMinDimension;
-                const bool     largeEnoughSourceSize =
-                    !fileSizeEc && sourceFileBytes >= m_Options.basisUCompressMinSourceBytes;
-                shouldCompressWithBasisU = largeEnoughResolution && largeEnoughSourceSize;
-
-                if (!shouldCompressWithBasisU)
-                {
-                    std::cout << "Skipping BasisU compression for small texture (" << osPath.filename().generic_string()
-                              << ", longestEdge=" << longestEdge << ", sourceBytes=";
-                    if (fileSizeEc)
-                        std::cout << "unknown";
-                    else
-                        std::cout << sourceFileBytes;
-                    std::cout << ", thresholds=" << m_Options.basisUCompressMinDimension << "px/"
-                              << m_Options.basisUCompressMinSourceBytes << "B)" << std::endl;
-                }
-            }
-
             if (shouldCompressWithBasisU)
             {
                 ktxBasisParams params {};

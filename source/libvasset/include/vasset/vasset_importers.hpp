@@ -33,7 +33,7 @@ namespace vasset
             uint32_t basisUThreadCount {0}; // 0 = auto-detect
 
             // By default, only large source textures pay the BasisU encode cost.
-            // Smaller images are still emitted as KTX2, but remain uncompressed.
+            // Smaller source images keep their original encoded payload.
             bool     compressOnlyLargeTextures {true};
             uint32_t basisUCompressMinDimension {2048};
             uint64_t basisUCompressMinSourceBytes {2ULL * 1024ULL * 1024ULL};
