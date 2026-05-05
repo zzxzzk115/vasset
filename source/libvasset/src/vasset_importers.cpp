@@ -31,11 +31,14 @@
 #include <meshoptimizer.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <unordered_map>
 #include <variant>
 
@@ -277,11 +280,47 @@ namespace
         return keyPath.generic_string();
     }
 
-    std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, vbase::StringView assetBaseName)
+    std::string stableShortHash(vbase::StringView value)
+    {
+        // FNV-1a keeps collision suffixes stable across platforms and toolchains.
+        uint32_t hash = 2166136261u;
+        for (size_t i = 0; i < value.size(); ++i)
+        {
+            hash ^= static_cast<uint8_t>(value[i]);
+            hash *= 16777619u;
+        }
+
+        std::ostringstream out;
+        out << std::hex << std::nouppercase << std::setfill('0') << std::setw(8) << hash;
+        return out.str();
+    }
+
+    std::string importedAssetBaseName(vbase::StringView relativeSourcePath)
     {
         std::filesystem::path keyPath {std::string(relativeSourcePath)};
-        keyPath.replace_filename(std::string(assetBaseName));
-        return keyPath.generic_string();
+        return keyPath.stem().generic_string();
+    }
+
+    std::string importedAssetKeyForCookedOutput(const vasset::VAssetRegistry& registry,
+                                                vasset::VAssetType            type,
+                                                vbase::StringView             relativeSourcePath,
+                                                vbase::StringView             assetBaseName = {})
+    {
+        const std::string relativeSourcePathStr(relativeSourcePath);
+        const std::string baseName =
+            assetBaseName.size() == 0 ? importedAssetBaseName(relativeSourcePath) : std::string(assetBaseName);
+
+        auto makeImportedPath = [&](const std::string& key) {
+            return registry.getImportedAssetPath(type, key, true);
+        };
+
+        const std::string candidatePath = makeImportedPath(baseName);
+        const auto        candidateUUID = vbase::uuid_from_string_key(candidatePath);
+        const auto        existingEntry = registry.lookup(candidateUUID);
+        if (existingEntry.type == vasset::VAssetType::eUnknown || existingEntry.sourcePath == relativeSourcePathStr)
+            return baseName;
+
+        return baseName + "_" + stableShortHash(relativeSourcePath);
     }
 
     vasset::VAssetType inferSourceTextAssetType(const std::string& ext)
@@ -542,7 +581,10 @@ namespace vasset
         // ------------------------------------------------------------
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eTexture, importedAssetKeyFromRelativeSource(relativeSrcPath), true);
+            m_Registry.getImportedAssetPath(
+                VAssetType::eTexture,
+                importedAssetKeyForCookedOutput(m_Registry, VAssetType::eTexture, relativeSrcPath),
+                true);
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto       entry      = m_Registry.lookup(lookupUUID);
@@ -994,7 +1036,9 @@ namespace vasset
         // Check registry
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
-            m_Registry.getImportedAssetPath(VAssetType::eMesh, importedAssetKeyFromRelativeSource(relativeSrcPath), true);
+            m_Registry.getImportedAssetPath(VAssetType::eMesh,
+                                            importedAssetKeyForCookedOutput(m_Registry, VAssetType::eMesh, relativeSrcPath),
+                                            true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -1642,7 +1686,10 @@ namespace vasset
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
         const std::string relativeImportedPath =
             m_Registry.getImportedAssetPath(
-                VAssetType::eGaussianSplat, importedAssetKeyFromRelativeSource(relativeSrcPath, assetBaseName), true);
+                VAssetType::eGaussianSplat,
+                importedAssetKeyForCookedOutput(
+                    m_Registry, VAssetType::eGaussianSplat, relativeSrcPath, assetBaseName),
+                true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         auto entry      = m_Registry.lookup(lookupUUID);
