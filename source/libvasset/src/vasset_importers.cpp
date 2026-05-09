@@ -28,6 +28,8 @@
 #include <gf/core/gauss_ir.h>
 #include <gf/io/registry.h>
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <meshoptimizer.h>
 
 #include <cmath>
@@ -295,6 +297,25 @@ namespace
         if (endsWith(filename, ".compressed.ply"))
             return filename.substr(0, filename.size() - std::strlen(".compressed.ply"));
         return path.stem().generic_string();
+    }
+
+    bool gaussianSplatNeedsPlyAxisConversion(const std::string& formatKey)
+    {
+        return formatKey == "ply" || formatKey == "compressed.ply";
+    }
+
+    glm::vec3 convertGaussianPlyPositionToEngine(const glm::vec3& position)
+    {
+        // Standard 3DGS PLY data is commonly exported in an OpenCV/COLMAP-style
+        // basis (X right, Y down, Z forward). Vultra's camera space uses Y up
+        // and -Z forward, so rotate the cloud 180 degrees around X on import.
+        return glm::vec3(position.x, -position.y, -position.z);
+    }
+
+    glm::quat convertGaussianPlyRotationToEngine(const glm::quat& sourceRotation)
+    {
+        const glm::quat basisRotation(0.0f, 1.0f, 0.0f, 0.0f);
+        return glm::normalize(basisRotation * sourceRotation);
     }
 
     std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, bool keepExtension = false)
@@ -1759,6 +1780,8 @@ namespace vasset
         if (cloud.numPoints <= 0)
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
+        const bool convertPlyAxes = gaussianSplatNeedsPlyAxisConversion(formatKey);
+
         // Fill per-splat data from GaussForge IR.
         const int32_t N      = cloud.numPoints;
         outSplat.numPoints   = N;
@@ -1770,14 +1793,22 @@ namespace vasset
         for (int32_t i = 0; i < N; ++i)
         {
             VGaussianSplatPoint& p = outSplat.splats[i];
-            p.position = glm::vec3(cloud.positions[i * 3 + 0], cloud.positions[i * 3 + 1], cloud.positions[i * 3 + 2]);
+            const glm::vec3 sourcePosition(
+                cloud.positions[i * 3 + 0],
+                cloud.positions[i * 3 + 1],
+                cloud.positions[i * 3 + 2]);
+            p.position = convertPlyAxes ? convertGaussianPlyPositionToEngine(sourcePosition) : sourcePosition;
             p.opacity  = cloud.alphas[i];
             p.scale    = glm::vec3(cloud.scales[i * 3 + 0], cloud.scales[i * 3 + 1], cloud.scales[i * 3 + 2]);
             p.pad0     = 0.0f;
-            p.rotation = glm::vec4(cloud.rotations[i * 4 + 1],
-                                   cloud.rotations[i * 4 + 2],
-                                   cloud.rotations[i * 4 + 3],
-                                   cloud.rotations[i * 4 + 0]);
+            glm::quat sourceRotation(
+                cloud.rotations[i * 4 + 0],
+                cloud.rotations[i * 4 + 1],
+                cloud.rotations[i * 4 + 2],
+                cloud.rotations[i * 4 + 3]);
+            if (convertPlyAxes)
+                sourceRotation = convertGaussianPlyRotationToEngine(sourceRotation);
+            p.rotation = glm::vec4(sourceRotation.x, sourceRotation.y, sourceRotation.z, sourceRotation.w);
             p.shDC     = glm::vec3(cloud.colors[i * 3 + 0], cloud.colors[i * 3 + 1], cloud.colors[i * 3 + 2]);
             p.pad1     = 0.0f;
         }
