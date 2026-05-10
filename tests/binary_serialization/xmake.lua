@@ -12,7 +12,7 @@ target("test-binary-serialization")
     add_packages("gtest")
 
     -- add deps
-    add_deps("vasset")
+    add_deps("vasset", "vasset-import")
 
     -- add defines
     if is_mode("debug") then

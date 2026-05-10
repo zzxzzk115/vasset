@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -76,6 +77,96 @@ bool getlineSkipComment(const uint8_t *&data, size_t &remaining,
   return false;
 }
 
+enum class PlyScalarType {
+  Int8,
+  UInt8,
+  Int16,
+  UInt16,
+  Int32,
+  UInt32,
+  Float32,
+  Float64,
+};
+
+struct PlyProperty {
+  std::string name;
+  PlyScalarType type = PlyScalarType::Float32;
+  size_t size = sizeof(float);
+};
+
+bool parsePlyScalarType(const std::string &name, PlyScalarType &type,
+                        size_t &size) {
+  if (name == "char" || name == "int8") {
+    type = PlyScalarType::Int8;
+    size = sizeof(int8_t);
+    return true;
+  }
+  if (name == "uchar" || name == "uint8" || name == "uint8_t") {
+    type = PlyScalarType::UInt8;
+    size = sizeof(uint8_t);
+    return true;
+  }
+  if (name == "short" || name == "int16") {
+    type = PlyScalarType::Int16;
+    size = sizeof(int16_t);
+    return true;
+  }
+  if (name == "ushort" || name == "uint16") {
+    type = PlyScalarType::UInt16;
+    size = sizeof(uint16_t);
+    return true;
+  }
+  if (name == "int" || name == "int32") {
+    type = PlyScalarType::Int32;
+    size = sizeof(int32_t);
+    return true;
+  }
+  if (name == "uint" || name == "uint32") {
+    type = PlyScalarType::UInt32;
+    size = sizeof(uint32_t);
+    return true;
+  }
+  if (name == "float" || name == "float32") {
+    type = PlyScalarType::Float32;
+    size = sizeof(float);
+    return true;
+  }
+  if (name == "double" || name == "float64") {
+    type = PlyScalarType::Float64;
+    size = sizeof(double);
+    return true;
+  }
+  return false;
+}
+
+template <typename T> T readScalarLE(const uint8_t *data) {
+  T value{};
+  std::memcpy(&value, data, sizeof(T));
+  return value;
+}
+
+float readPlyScalar(const uint8_t *data, PlyScalarType type) {
+  switch (type) {
+  case PlyScalarType::Int8:
+    return static_cast<float>(readScalarLE<int8_t>(data));
+  case PlyScalarType::UInt8:
+    return static_cast<float>(readScalarLE<uint8_t>(data));
+  case PlyScalarType::Int16:
+    return static_cast<float>(readScalarLE<int16_t>(data));
+  case PlyScalarType::UInt16:
+    return static_cast<float>(readScalarLE<uint16_t>(data));
+  case PlyScalarType::Int32:
+    return static_cast<float>(readScalarLE<int32_t>(data));
+  case PlyScalarType::UInt32:
+    return static_cast<float>(readScalarLE<uint32_t>(data));
+  case PlyScalarType::Float32:
+    return readScalarLE<float>(data);
+  case PlyScalarType::Float64:
+    return static_cast<float>(readScalarLE<double>(data));
+  }
+  return 0.0f;
+}
+
 } // namespace
 
 class PlyReader : public IGaussReader {
@@ -111,8 +202,12 @@ public:
             MakeError("ply read failed: invalid vertex count"));
       }
 
+      // Keep every vertex property, not only the standard 3DGS float fields.
+      // Extra columns such as importance, lod_level or cluster_id are forwarded to
+      // libvasset so the engine can build an Ordered CLOD ranking after import.
+      std::vector<PlyProperty> properties;
       std::unordered_map<std::string, int> fields;
-      int propIdx = 0;
+      size_t rowStrideBytes = 0;
       for (;;) {
         if (!getlineSkipComment(current, remaining, line)) {
           return Expected<GaussianCloudIR>(
@@ -120,13 +215,31 @@ public:
         }
         if (line == "end_header")
           break;
-        const std::string prefix = "property float ";
+        const std::string prefix = "property ";
         if (line.rfind(prefix, 0) != 0) {
+          return Expected<GaussianCloudIR>(
+              MakeError("ply read failed: unsupported header line"));
+        }
+
+        std::istringstream propStream(line.substr(prefix.size()));
+        std::string typeName;
+        std::string name;
+        propStream >> typeName >> name;
+        if (typeName == "list" || name.empty()) {
           return Expected<GaussianCloudIR>(
               MakeError("ply read failed: unsupported property type"));
         }
-        std::string name = line.substr(prefix.size());
-        fields[name] = propIdx++;
+
+        PlyProperty prop;
+        prop.name = name;
+        if (!parsePlyScalarType(typeName, prop.type, prop.size)) {
+          return Expected<GaussianCloudIR>(
+              MakeError("ply read failed: unsupported property type"));
+        }
+
+        fields[prop.name] = static_cast<int>(properties.size());
+        rowStrideBytes += prop.size;
+        properties.push_back(std::move(prop));
       }
 
       auto idx = [&fields](const std::string &name) -> int {
@@ -168,18 +281,26 @@ public:
       int shDim = static_cast<int>(shIdx.size() / 3);
 
       // Read binary data
-      const size_t dataSize =
-          static_cast<size_t>(numPoints) * fields.size() * sizeof(float);
+      const size_t dataSize = static_cast<size_t>(numPoints) * rowStrideBytes;
       if (remaining < dataSize) {
         return Expected<GaussianCloudIR>(
             MakeError("ply read failed: insufficient data"));
       }
 
-      // Pre-allocate vector and use memcpy for efficient bulk copy
-      // Compiler can optimize memcpy with SIMD instructions
-      const size_t numValues = static_cast<size_t>(numPoints) * fields.size();
+      const size_t numValues =
+          static_cast<size_t>(numPoints) * properties.size();
       std::vector<float> values(numValues);
-      std::memcpy(values.data(), current, dataSize);
+
+      const uint8_t *row = current;
+      for (int i = 0; i < numPoints; ++i) {
+        const uint8_t *fieldData = row;
+        float *dst = values.data() + static_cast<size_t>(i) * properties.size();
+        for (size_t p = 0; p < properties.size(); ++p) {
+          dst[p] = readPlyScalar(fieldData, properties[p].type);
+          fieldData += properties[p].size;
+        }
+        row += rowStrideBytes;
+      }
       current += dataSize;
       remaining -= dataSize;
 
@@ -207,7 +328,7 @@ public:
       float *__restrict__ shPtr = ir.sh.data();
 
       const float *__restrict__ valuesPtr = values.data();
-      const size_t stride = fields.size();
+      const size_t stride = properties.size();
 
       // Cache field indices in local variables for better register allocation
       const int pos0 = posIdx[0], pos1 = posIdx[1], pos2 = posIdx[2];
@@ -217,6 +338,36 @@ public:
                 rot3 = rotIdx[3];
       const int color0 = colorIdx[0], color1 = colorIdx[1],
                 color2 = colorIdx[2];
+
+      auto isBaseFieldIndex = [&](int propIndex) {
+        for (int v : posIdx)
+          if (v == propIndex)
+            return true;
+        for (int v : scaleIdx)
+          if (v == propIndex)
+            return true;
+        for (int v : rotIdx)
+          if (v == propIndex)
+            return true;
+        for (int v : colorIdx)
+          if (v == propIndex)
+            return true;
+        if (alphaIdx == propIndex)
+          return true;
+        for (int v : shIdx)
+          if (v == propIndex)
+            return true;
+        return false;
+      };
+
+      std::vector<int> extraIdx;
+      extraIdx.reserve(properties.size());
+      for (size_t p = 0; p < properties.size(); ++p) {
+        if (!isBaseFieldIndex(static_cast<int>(p))) {
+          extraIdx.push_back(static_cast<int>(p));
+          ir.extras[properties[p].name].resize(numPoints);
+        }
+      }
 
       // Optimized loop: direct writes with pointer arithmetic
       // Compiler can auto-vectorize this pattern easily
@@ -259,6 +410,10 @@ public:
           shPtr[1] = base[shIdx[j + shDim]];     // coeff j, G
           shPtr[2] = base[shIdx[j + 2 * shDim]]; // coeff j, B
           shPtr += 3;
+        }
+
+        for (int propIndex : extraIdx) {
+          ir.extras[properties[propIndex].name][i] = base[propIndex];
         }
       }
 
