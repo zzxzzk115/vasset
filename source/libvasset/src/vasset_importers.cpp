@@ -32,6 +32,7 @@
 
 #include <meshoptimizer.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -39,7 +40,9 @@
 #include <format>
 #include <fstream>
 #include <iomanip>
+#include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <variant>
@@ -316,6 +319,88 @@ namespace
     {
         const glm::quat basisRotation(0.0f, 1.0f, 0.0f, 0.0f);
         return glm::normalize(basisRotation * sourceRotation);
+    }
+
+    const std::vector<float>* findGaussianExtra(const gf::GaussianCloudIR&           cloud,
+                                                std::initializer_list<const char*> names)
+    {
+        for (const char* name : names)
+        {
+            auto it = cloud.extras.find(name);
+            if (it != cloud.extras.end())
+                return &it->second;
+        }
+        return nullptr;
+    }
+
+    std::vector<float> copyPerPointFloatExtra(const gf::GaussianCloudIR&           cloud,
+                                              int32_t                              pointCount,
+                                              std::initializer_list<const char*> names)
+    {
+        const auto* values = findGaussianExtra(cloud, names);
+        if (!values || values->size() != static_cast<size_t>(pointCount))
+            return {};
+
+        std::vector<float> out = *values;
+        for (float& value : out)
+        {
+            if (!std::isfinite(value))
+                value = 0.0f;
+        }
+        return out;
+    }
+
+    uint32_t gaussianExtraToUint(float value)
+    {
+        if (!std::isfinite(value))
+            return 0u;
+        if (value < 0.0f)
+            return 0u;
+        if (value >= static_cast<float>(std::numeric_limits<uint32_t>::max()))
+            return std::numeric_limits<uint32_t>::max();
+        return static_cast<uint32_t>(std::llround(value));
+    }
+
+    std::vector<uint32_t> copyPerPointUintExtra(const gf::GaussianCloudIR&           cloud,
+                                                int32_t                              pointCount,
+                                                std::initializer_list<const char*> names)
+    {
+        const auto* values = findGaussianExtra(cloud, names);
+        if (!values || values->size() != static_cast<size_t>(pointCount))
+            return {};
+
+        std::vector<uint32_t> out;
+        out.reserve(values->size());
+        for (float value : *values)
+            out.push_back(gaussianExtraToUint(value));
+        return out;
+    }
+
+    vasset::VGaussianSplatLodData extractGaussianSplatLodData(const gf::GaussianCloudIR& cloud, int32_t pointCount)
+    {
+        vasset::VGaussianSplatLodData lod {};
+
+        // Accept common research/exporter aliases. The main engine only needs
+        // importance for Ordered CLOD, so a PLY with just score/weight/error can
+        // already drive the renderer. Additional streams are kept as metadata.
+        lod.importance = copyPerPointFloatExtra(
+            cloud,
+            pointCount,
+            {"importance", "lod_importance", "lodScore", "lod_score", "lodscore", "score", "weight", "error"});
+        lod.lodLevel = copyPerPointUintExtra(
+            cloud,
+            pointCount,
+            {"lodLevel", "lod_level", "lod", "level", "depth", "clod_level"});
+        lod.clusterId = copyPerPointUintExtra(
+            cloud,
+            pointCount,
+            {"clusterId", "cluster_id", "cluster", "clusterIndex", "cluster_index", "nodeId", "node_id"});
+
+        if (!lod.hasAnyData())
+            return lod;
+
+        lod.type = vasset::VGaussianSplatLodType::eFlatImportance;
+        return lod;
     }
 
     std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, bool keepExtension = false)
@@ -1788,6 +1873,7 @@ namespace vasset
         outSplat.shDegree    = cloud.meta.shDegree;
         outSplat.antialiased = cloud.meta.antialiased;
         outSplat.sh          = cloud.sh;
+        outSplat.lod         = extractGaussianSplatLodData(cloud, N);
 
         outSplat.splats.resize(N);
         for (int32_t i = 0; i < N; ++i)

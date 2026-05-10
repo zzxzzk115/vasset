@@ -2,9 +2,11 @@
 
 #include <zstd.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -23,8 +25,46 @@ namespace vasset
         struct VGaussianSplatPayloadHeader
         {
             char     magic[16]; // "VGAUSSIANSPLAT"
-            uint32_t version;   // 1
+            uint32_t version;   // 2 = base splat, 3 = flat LOD metadata streams
         };
+
+        constexpr uint32_t kGaussianSplatPayloadVersion            = 3;
+        constexpr uint32_t kMinGaussianSplatPayloadVersion         = 2;
+        constexpr uint32_t kMaxReadableGaussianSplatPayloadVersion = 4; // v4 hierarchy sidecars are ignored.
+
+        void sanitizeGaussianSplatLod(VGaussianSplat& splat)
+        {
+            auto& lod = splat.lod;
+
+            const size_t pointCount = splat.numPoints > 0 ? static_cast<size_t>(splat.numPoints) : 0u;
+            // Per-point streams must stay aligned with the raw Gaussian payload.
+            // Misaligned sidecars are safer to drop than to serialize, because the
+            // renderer turns importance directly into local point indices.
+            auto clearIfNotPerPoint = [pointCount](auto& values) {
+                if (!values.empty() && values.size() != pointCount)
+                    values.clear();
+            };
+
+            clearIfNotPerPoint(lod.importance);
+            clearIfNotPerPoint(lod.lodLevel);
+            clearIfNotPerPoint(lod.clusterId);
+
+            if (!lod.hasAnyData())
+            {
+                lod.type = VGaussianSplatLodType::eNone;
+                return;
+            }
+
+            switch (lod.type)
+            {
+                case VGaussianSplatLodType::eFlatImportance:
+                    break;
+                case VGaussianSplatLodType::eNone:
+                default:
+                    lod.type = VGaussianSplatLodType::eFlatImportance;
+                    break;
+            }
+        }
 
     } // namespace
 
@@ -50,7 +90,7 @@ namespace vasset
         // payload header (version 2 = cloud format)
         VGaussianSplatPayloadHeader payloadHeader {};
         std::memcpy(payloadHeader.magic, "VGAUSSIANSPLAT", 15);
-        payloadHeader.version = 2;
+        payloadHeader.version = kGaussianSplatPayloadVersion;
         writeRaw(&payloadHeader, sizeof(payloadHeader));
 
         // UUID
@@ -79,6 +119,24 @@ namespace vasset
         writeRaw(&shCount, sizeof(shCount));
         if (shCount > 0)
             writeRaw(splat.sh.data(), shCount * sizeof(float));
+
+        // Optional LOD sidecar. Kept after the base splat payload so older payload
+        // v2 assets remain readable; the main engine can ignore the sidecar and
+        // still load/render the raw splats.
+        const auto& lod     = splat.lod;
+        uint32_t    lodType = static_cast<uint32_t>(lod.hasAnyData() ? lod.type : VGaussianSplatLodType::eNone);
+        writeRaw(&lodType, sizeof(lodType));
+
+        auto writeVector = [&]<typename T>(const std::vector<T>& values) {
+            uint32_t count = static_cast<uint32_t>(std::min<size_t>(values.size(), std::numeric_limits<uint32_t>::max()));
+            writeRaw(&count, sizeof(count));
+            if (count > 0)
+                writeRaw(values.data(), static_cast<size_t>(count) * sizeof(T));
+        };
+
+        writeVector(lod.importance);
+        writeVector(lod.lodLevel);
+        writeVector(lod.clusterId);
 
         // ---- Write to file ----
         std::ofstream file((std::string(filePath)), std::ios::binary);
@@ -214,7 +272,8 @@ namespace vasset
         if (std::string(payloadHeader.magic) != "VGAUSSIANSPLAT")
             return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
 
-        if (payloadHeader.version != 2)
+        if (payloadHeader.version < kMinGaussianSplatPayloadVersion ||
+            payloadHeader.version > kMaxReadableGaussianSplatPayloadVersion)
             return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
 
         // UUID
@@ -253,6 +312,32 @@ namespace vasset
         outSplat.sh.resize(shCount);
         if (shCount > 0 && !readPayload(outSplat.sh.data(), shCount * sizeof(float)))
             return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+
+        outSplat.lod = {};
+        if (payloadHeader.version >= 3)
+        {
+            uint32_t lodType = 0;
+            if (!readPayload(&lodType, sizeof(lodType)))
+                return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+            outSplat.lod.type = static_cast<VGaussianSplatLodType>(lodType);
+
+            auto readVector = [&]<typename T>(std::vector<T>& values) -> bool {
+                uint32_t count = 0;
+                if (!readPayload(&count, sizeof(count)))
+                    return false;
+                values.resize(count);
+                return count == 0 || readPayload(values.data(), static_cast<size_t>(count) * sizeof(T));
+            };
+
+            if (!readVector(outSplat.lod.importance))
+                return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+            if (!readVector(outSplat.lod.lodLevel))
+                return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+            if (!readVector(outSplat.lod.clusterId))
+                return vbase::Result<void, AssetError>::err(AssetError::eInvalidFormat);
+        }
+
+        sanitizeGaussianSplatLod(outSplat);
 
         return vbase::Result<void, AssetError>::ok();
     }

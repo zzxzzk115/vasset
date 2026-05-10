@@ -32,6 +32,30 @@ namespace vasset
     static_assert(sizeof(VGaussianSplatPoint) == 64);
     static_assert(sizeof(VGaussianSplatPoint) % 16 == 0);
 
+    enum class VGaussianSplatLodType : uint32_t
+    {
+        eNone = 0,
+        eFlatImportance,
+    };
+
+    struct VGaussianSplatLodData
+    {
+        VGaussianSplatLodType type {VGaussianSplatLodType::eNone};
+
+        // Optional per-splat streams. Empty means the source asset did not provide
+        // the stream. "importance" is the renderer-facing field: larger values rank
+        // earlier in vultra's Ordered CLOD prefix. lodLevel/clusterId are kept only
+        // as lightweight debugging/export metadata.
+        std::vector<float>    importance;
+        std::vector<uint32_t> lodLevel;
+        std::vector<uint32_t> clusterId;
+
+        [[nodiscard]] bool hasAnyData() const
+        {
+            return !importance.empty() || !lodLevel.empty() || !clusterId.empty();
+        }
+    };
+
     // Cloud-level Gaussian Splat asset.
     struct VGaussianSplat
     {
@@ -52,6 +76,9 @@ namespace vasset
         // Total size: numPoints * shCoeffsPerPoint(shDegree) * 3
         //   degree 1 ->  9 floats/point, degree 2 -> 24, degree 3 -> 45, degree 4 -> 72
         std::vector<float> sh;
+
+        // Optional LOD sidecar. Empty for ordinary PLY/SPZ assets.
+        VGaussianSplatLodData lod;
     };
 
     vbase::Result<void, AssetError>
