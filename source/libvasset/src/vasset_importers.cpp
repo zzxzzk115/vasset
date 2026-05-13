@@ -158,13 +158,18 @@ namespace
                                       const vasset::VAssetImporter::ImportOptions& options)
     {
         std::vector<std::string> ignoredDirectories;
-        ignoredDirectories.reserve(options.ignoredDirectories.size() + 1);
-        ignoredDirectories.push_back(normalizeIgnoredDirectory(registry.getImportedFolderName()));
+        ignoredDirectories.reserve(options.ignoredDirectories.size() + 2);
+        auto appendIgnoredDirectory = [&ignoredDirectories](std::string dir) {
+            auto normalized = normalizeIgnoredDirectory(std::move(dir));
+            if (!normalized.empty() && !std::ranges::contains(ignoredDirectories, normalized))
+                ignoredDirectories.push_back(std::move(normalized));
+        };
+
+        appendIgnoredDirectory(registry.getImportedFolderName());
+        appendIgnoredDirectory("training");
         for (const auto& ignoredDirectory : options.ignoredDirectories)
         {
-            auto normalized = normalizeIgnoredDirectory(ignoredDirectory);
-            if (!normalized.empty())
-                ignoredDirectories.push_back(std::move(normalized));
+            appendIgnoredDirectory(ignoredDirectory);
         }
         return ignoredDirectories;
     }
