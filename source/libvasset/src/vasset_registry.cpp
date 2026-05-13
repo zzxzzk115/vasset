@@ -279,6 +279,7 @@ namespace vasset
     }
 
     std::string VAssetRegistry::getAssetRootPath() const { return m_AssetRootPath; }
+    std::string VAssetRegistry::getImportedFolderName() const { return m_ImportedFolderName; }
 
     std::string VAssetRegistry::getSourceAssetPath(vbase::StringView assetFullPath, bool relative) const
     {

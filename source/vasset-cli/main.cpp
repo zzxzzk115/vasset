@@ -419,7 +419,7 @@ static int cmd_import(int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::cout << "Usage: vasset-cli import <asset-root> [--reimport]" << std::endl;
+        std::cout << "Usage: vasset-cli import <asset-root> [--reimport] [--ignore-dir <relative-dir>]" << std::endl;
         return 1;
     }
 
@@ -433,11 +433,23 @@ static int cmd_import(int argc, char** argv)
     }
     std::string assetRootPath      = assetRootPathResolved.generic_string();
     std::string outputRegistryFile = assetRootPath + "/imported/asset_registry.tsv";
-    bool        reimport           = false;
+    bool                     reimport = false;
+    std::vector<std::string> ignoredDirectories;
     for (int i = 2; i < argc; ++i)
     {
         if (std::string_view(argv[i]) == "--reimport")
+        {
             reimport = true;
+        }
+        else if (std::string_view(argv[i]) == "--ignore-dir")
+        {
+            if (i + 1 >= argc)
+            {
+                std::cerr << "Missing value for --ignore-dir" << std::endl;
+                return 1;
+            }
+            ignoredDirectories.push_back(std::filesystem::path(argv[++i]).generic_string());
+        }
     }
 
     // Setup registry
@@ -453,6 +465,7 @@ static int cmd_import(int argc, char** argv)
 
     // Setup importer
     VAssetImporter assetImporter(registry);
+    assetImporter.setOptions({.ignoredDirectories = ignoredDirectories});
 
     // Import all assets
     auto ir = assetImporter.importOrReimportAssetFolder(assetRootPath, reimport);

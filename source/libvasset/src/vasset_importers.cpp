@@ -43,6 +43,8 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <span>
+#include <numeric>
 #include <sstream>
 #include <unordered_map>
 #include <variant>
@@ -136,6 +138,48 @@ namespace
     bool isValidSourceTextAsset(vbase::StringView ext)
     {
         return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext);
+    }
+
+    bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
+    {
+        return relPath == dir || relPath.rfind(dir + "/", 0) == 0;
+    }
+
+    std::string normalizeIgnoredDirectory(std::string dir)
+    {
+        std::ranges::replace(dir, '\\', '/');
+        while (!dir.empty() && dir.back() == '/')
+            dir.pop_back();
+        return dir;
+    }
+
+    std::vector<std::string>
+    makeIgnoredAssetImportDirectories(const vasset::VAssetRegistry&               registry,
+                                      const vasset::VAssetImporter::ImportOptions& options)
+    {
+        std::vector<std::string> ignoredDirectories;
+        ignoredDirectories.reserve(options.ignoredDirectories.size() + 1);
+        ignoredDirectories.push_back(normalizeIgnoredDirectory(registry.getImportedFolderName()));
+        for (const auto& ignoredDirectory : options.ignoredDirectories)
+        {
+            auto normalized = normalizeIgnoredDirectory(ignoredDirectory);
+            if (!normalized.empty())
+                ignoredDirectories.push_back(std::move(normalized));
+        }
+        return ignoredDirectories;
+    }
+
+    bool isIgnoredAssetImportDirectory(const std::string& relPath, std::span<const std::string> ignoredDirectories)
+    {
+        return std::ranges::any_of(ignoredDirectories,
+                                   [&](const std::string& ignoredDir) { return relPath == ignoredDir; });
+    }
+
+    bool isIgnoredAssetImportPath(const std::string& relPath, std::span<const std::string> ignoredDirectories)
+    {
+        return std::ranges::any_of(ignoredDirectories, [&](const std::string& ignoredDir) {
+            return isPathUnderDirectory(relPath, ignoredDir);
+        });
     }
 
     vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
@@ -401,6 +445,73 @@ namespace
 
         lod.type = vasset::VGaussianSplatLodType::eFlatImportance;
         return lod;
+    }
+
+    size_t gaussianRestShFloatCountPerPoint(const int32_t shDegree)
+    {
+        const int32_t degree = std::clamp(shDegree, 0, 4);
+        if (degree <= 0)
+            return 0;
+        return static_cast<size_t>(((degree + 1) * (degree + 1)) - 1) * 3ull;
+    }
+
+    template <typename T>
+    void reorderGaussianPerPointVector(std::vector<T>& values, const std::vector<uint32_t>& order)
+    {
+        if (values.size() != order.size())
+            return;
+
+        std::vector<T> reordered;
+        reordered.reserve(values.size());
+        for (const uint32_t sourceIndex : order)
+            reordered.push_back(values[sourceIndex]);
+        values = std::move(reordered);
+    }
+
+    void physicallySortGaussianSplatByImportance(vasset::VGaussianSplat& splat)
+    {
+        const size_t pointCount = splat.splats.size();
+        if (pointCount == 0 || splat.lod.importance.size() != pointCount)
+            return;
+
+        std::vector<uint32_t> order(pointCount);
+        std::iota(order.begin(), order.end(), 0u);
+
+        // Larger importance means earlier in the CLOD prefix. Stable ties keep
+        // the original exporter order deterministic.
+        std::stable_sort(order.begin(), order.end(), [&](const uint32_t a, const uint32_t b) {
+            const float ia = splat.lod.importance[a];
+            const float ib = splat.lod.importance[b];
+            if (ia != ib)
+                return ia > ib;
+            return a < b;
+        });
+
+        if (std::is_sorted(order.begin(), order.end()))
+            return;
+
+        reorderGaussianPerPointVector(splat.splats, order);
+        reorderGaussianPerPointVector(splat.lod.importance, order);
+        reorderGaussianPerPointVector(splat.lod.lodLevel, order);
+        reorderGaussianPerPointVector(splat.lod.clusterId, order);
+
+        size_t shStride = gaussianRestShFloatCountPerPoint(splat.shDegree);
+        if ((shStride == 0 || splat.sh.size() != pointCount * shStride) && !splat.sh.empty() &&
+            splat.sh.size() % pointCount == 0)
+        {
+            shStride = splat.sh.size() / pointCount;
+        }
+        if (shStride > 0 && splat.sh.size() == pointCount * shStride)
+        {
+            std::vector<float> reorderedSh(splat.sh.size());
+            for (size_t rank = 0; rank < pointCount; ++rank)
+            {
+                const size_t srcOffset = static_cast<size_t>(order[rank]) * shStride;
+                const size_t dstOffset = rank * shStride;
+                std::copy_n(splat.sh.data() + srcOffset, shStride, reorderedSh.data() + dstOffset);
+            }
+            splat.sh = std::move(reorderedSh);
+        }
     }
 
     std::string importedAssetKeyFromRelativeSource(vbase::StringView relativeSourcePath, bool keepExtension = false)
@@ -1899,6 +2010,11 @@ namespace vasset
             p.pad1     = 0.0f;
         }
 
+        // Cook learned/imported CLOD assets as physical importance prefixes.
+        // Runtime can still read the importance sidecar, but the packed splat
+        // arrays themselves now make the first N points the highest-ranked N.
+        physicallySortGaussianSplatByImportance(outSplat);
+
         // Save cooked asset.
         const std::string importedPath =
             (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
@@ -1932,6 +2048,12 @@ namespace vasset
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry), m_GaussianSplatImporter(registry)
     {}
 
+    VAssetImporter& VAssetImporter::setOptions(const ImportOptions& options)
+    {
+        m_Options = options;
+        return *this;
+    }
+
     vbase::Result<void, AssetError> VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath,
                                                                                 bool              reimport)
     {
@@ -1946,15 +2068,29 @@ namespace vasset
         size_t importedSplats      = 0;
         size_t importedTextAssets  = 0;
 
+        const auto ignoredDirectories = makeIgnoredAssetImportDirectories(m_Registry, m_Options);
+
         std::cout << "[vasset] scanning asset folder: " << osPath.generic_string() << std::endl;
 
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(osPath))
+        for (auto it = std::filesystem::recursive_directory_iterator(osPath);
+             it != std::filesystem::recursive_directory_iterator();
+             ++it)
         {
+            const auto&       entry   = *it;
+            const std::string relPath = std::filesystem::relative(entry.path(), osPath).generic_string();
+            if (entry.is_directory())
+            {
+                if (isIgnoredAssetImportDirectory(relPath, ignoredDirectories))
+                {
+                    std::cout << "[vasset] skip dir : " << relPath << std::endl;
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
             if (!entry.is_regular_file())
                 continue;
             const std::string filePath = entry.path().generic_string();
-            const std::string relPath  = std::filesystem::relative(entry.path(), osPath).generic_string();
-            if (relPath == "imported" || relPath.rfind("imported/", 0) == 0)
+            if (isIgnoredAssetImportPath(relPath, ignoredDirectories))
                 continue;
             const std::string ext = entry.path().extension().generic_string();
             if (ext == ".vimport")
@@ -2034,7 +2170,8 @@ namespace vasset
 
         const std::string relPath =
             std::filesystem::relative(osPath, std::filesystem::path(m_Registry.getAssetRootPath())).generic_string();
-        if (relPath == "imported" || relPath.rfind("imported/", 0) == 0)
+        const auto ignoredDirectories = makeIgnoredAssetImportDirectories(m_Registry, m_Options);
+        if (isIgnoredAssetImportPath(relPath, ignoredDirectories))
             return vbase::Result<void, AssetError>::err(AssetError::eNotSupported);
 
         const std::string ext = osPath.extension().generic_string();
