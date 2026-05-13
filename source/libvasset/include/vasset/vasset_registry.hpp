@@ -49,6 +49,7 @@ namespace vasset
         void cleanup();
 
         std::string getAssetRootPath() const;
+        std::string getImportedFolderName() const;
 
         std::string getSourceAssetPath(vbase::StringView assetFullPath, bool relative) const;
         std::string getImportedAssetPath(VAssetType type, vbase::StringView assetName, bool relative) const;

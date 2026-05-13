@@ -11,6 +11,7 @@
 #include <assimp/scene.h>
 
 #include <string>
+#include <vector>
 
 namespace vasset
 {
@@ -107,7 +108,14 @@ namespace vasset
     class VAssetImporter
     {
     public:
+        struct ImportOptions
+        {
+            std::vector<std::string> ignoredDirectories;
+        };
+
         VAssetImporter(VAssetRegistry& registry);
+
+        VAssetImporter& setOptions(const ImportOptions& options);
 
         vbase::Result<void, AssetError> importOrReimportAssetFolder(vbase::StringView folderPath,
                                                                     bool              reimport = false);
@@ -122,5 +130,6 @@ namespace vasset
         VMeshImporter          m_MeshImporter;
         VTextureImporter       m_TextureImporter;
         VGaussianSplatImporter m_GaussianSplatImporter;
+        ImportOptions          m_Options;
     };
 } // namespace vasset

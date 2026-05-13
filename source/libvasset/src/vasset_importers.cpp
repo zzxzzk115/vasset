@@ -43,6 +43,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <span>
 #include <numeric>
 #include <sstream>
 #include <unordered_map>
@@ -139,17 +140,46 @@ namespace
         return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext);
     }
 
-    bool isIgnoredAssetImportDirectory(const std::string& relPath)
+    bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
     {
-        // "imported" is generated output. "training" holds COLMAP/images/raw
-        // point clouds for offline tools, not runtime assets for vasset import.
-        return relPath == "imported" || relPath == "training";
+        return relPath == dir || relPath.rfind(dir + "/", 0) == 0;
     }
 
-    bool isIgnoredAssetImportPath(const std::string& relPath)
+    std::string normalizeIgnoredDirectory(std::string dir)
     {
-        return isIgnoredAssetImportDirectory(relPath) || relPath.rfind("imported/", 0) == 0 ||
-               relPath.rfind("training/", 0) == 0;
+        std::ranges::replace(dir, '\\', '/');
+        while (!dir.empty() && dir.back() == '/')
+            dir.pop_back();
+        return dir;
+    }
+
+    std::vector<std::string>
+    makeIgnoredAssetImportDirectories(const vasset::VAssetRegistry&               registry,
+                                      const vasset::VAssetImporter::ImportOptions& options)
+    {
+        std::vector<std::string> ignoredDirectories;
+        ignoredDirectories.reserve(options.ignoredDirectories.size() + 1);
+        ignoredDirectories.push_back(normalizeIgnoredDirectory(registry.getImportedFolderName()));
+        for (const auto& ignoredDirectory : options.ignoredDirectories)
+        {
+            auto normalized = normalizeIgnoredDirectory(ignoredDirectory);
+            if (!normalized.empty())
+                ignoredDirectories.push_back(std::move(normalized));
+        }
+        return ignoredDirectories;
+    }
+
+    bool isIgnoredAssetImportDirectory(const std::string& relPath, std::span<const std::string> ignoredDirectories)
+    {
+        return std::ranges::any_of(ignoredDirectories,
+                                   [&](const std::string& ignoredDir) { return relPath == ignoredDir; });
+    }
+
+    bool isIgnoredAssetImportPath(const std::string& relPath, std::span<const std::string> ignoredDirectories)
+    {
+        return std::ranges::any_of(ignoredDirectories, [&](const std::string& ignoredDir) {
+            return isPathUnderDirectory(relPath, ignoredDir);
+        });
     }
 
     vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
@@ -2018,6 +2048,12 @@ namespace vasset
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry), m_GaussianSplatImporter(registry)
     {}
 
+    VAssetImporter& VAssetImporter::setOptions(const ImportOptions& options)
+    {
+        m_Options = options;
+        return *this;
+    }
+
     vbase::Result<void, AssetError> VAssetImporter::importOrReimportAssetFolder(vbase::StringView folderPath,
                                                                                 bool              reimport)
     {
@@ -2032,6 +2068,8 @@ namespace vasset
         size_t importedSplats      = 0;
         size_t importedTextAssets  = 0;
 
+        const auto ignoredDirectories = makeIgnoredAssetImportDirectories(m_Registry, m_Options);
+
         std::cout << "[vasset] scanning asset folder: " << osPath.generic_string() << std::endl;
 
         for (auto it = std::filesystem::recursive_directory_iterator(osPath);
@@ -2042,10 +2080,9 @@ namespace vasset
             const std::string relPath = std::filesystem::relative(entry.path(), osPath).generic_string();
             if (entry.is_directory())
             {
-                if (isIgnoredAssetImportDirectory(relPath))
+                if (isIgnoredAssetImportDirectory(relPath, ignoredDirectories))
                 {
-                    if (relPath == "training")
-                        std::cout << "[vasset] skip dir : " << relPath << std::endl;
+                    std::cout << "[vasset] skip dir : " << relPath << std::endl;
                     it.disable_recursion_pending();
                 }
                 continue;
@@ -2053,7 +2090,7 @@ namespace vasset
             if (!entry.is_regular_file())
                 continue;
             const std::string filePath = entry.path().generic_string();
-            if (isIgnoredAssetImportPath(relPath))
+            if (isIgnoredAssetImportPath(relPath, ignoredDirectories))
                 continue;
             const std::string ext = entry.path().extension().generic_string();
             if (ext == ".vimport")
@@ -2133,7 +2170,8 @@ namespace vasset
 
         const std::string relPath =
             std::filesystem::relative(osPath, std::filesystem::path(m_Registry.getAssetRootPath())).generic_string();
-        if (isIgnoredAssetImportPath(relPath))
+        const auto ignoredDirectories = makeIgnoredAssetImportDirectories(m_Registry, m_Options);
+        if (isIgnoredAssetImportPath(relPath, ignoredDirectories))
             return vbase::Result<void, AssetError>::err(AssetError::eNotSupported);
 
         const std::string ext = osPath.extension().generic_string();
