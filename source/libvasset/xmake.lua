@@ -3,6 +3,7 @@ local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or
 
 if enable_import_targets then
     add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = not is_plat("wasm")}})
+    add_requires("vshadersystem", {configs = { debug = is_mode("debug") }})
 end
 if is_plat("windows") then
     add_requires("ktx-windows")
@@ -71,7 +72,7 @@ if enable_import_targets then
         add_headerfiles(table.unpack(import_headers))
         add_files("src/editor_filesystem.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
-        add_packages("assimp", { public = true })
+        add_packages("assimp", "vshadersystem", { public = true })
         if is_mode("debug") then
             add_defines("_DEBUG", { public = true })
         else

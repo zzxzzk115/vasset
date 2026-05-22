@@ -8,6 +8,13 @@
 
 #include <ktx.h>
 
+#include <vshadersystem/binary.hpp>
+#include <vshadersystem/compiler.hpp>
+#include <vshadersystem/hash.hpp>
+#include <vshadersystem/library.hpp>
+#include <vshadersystem/shader_id.hpp>
+#include <vshadersystem/variant_key.hpp>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -45,7 +52,9 @@
 #include <limits>
 #include <span>
 #include <numeric>
+#include <regex>
 #include <sstream>
+#include <cstdlib>
 #include <unordered_map>
 #include <variant>
 
@@ -94,6 +103,11 @@ namespace
 
     bool isValidTexture(vbase::StringView ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
 
+    bool hasSuffix(const std::string& value, const std::string& suffix)
+    {
+        return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
     vasset::VTextureFileFormat textureFileFormatFromExtension(vbase::StringView ext)
     {
         if (ext == ".jpg")
@@ -135,9 +149,27 @@ namespace
 
     bool isValidScriptLua(vbase::StringView ext) { return ext == ".lua"; }
 
-    bool isValidSourceTextAsset(vbase::StringView ext)
+    bool isValidScriptableObjectLua(const std::filesystem::path& path)
     {
-        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext);
+        const auto filename = path.filename().generic_string();
+        return hasSuffix(filename, ".vso.lua") || hasSuffix(filename, ".vsrp.lua") ||
+               hasSuffix(filename, ".vfeature.lua");
+    }
+
+    bool isValidShaderLibraryManifest(const std::filesystem::path& path)
+    {
+        return hasSuffix(path.filename().generic_string(), ".vshaderlib.lua");
+    }
+
+    bool isValidRenderGraphJson(const std::filesystem::path& path)
+    {
+        return hasSuffix(path.filename().generic_string(), ".vrg.json");
+    }
+
+    bool isValidSourceTextAsset(const std::filesystem::path& path)
+    {
+        const auto ext = path.extension().generic_string();
+        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path);
     }
 
     bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
@@ -531,9 +563,9 @@ namespace
     {
         // FNV-1a keeps collision suffixes stable across platforms and toolchains.
         uint32_t hash = 2166136261u;
-        for (size_t i = 0; i < value.size(); ++i)
+        for (char i : value)
         {
-            hash ^= static_cast<uint8_t>(value[i]);
+            hash ^= static_cast<uint8_t>(i);
             hash *= 16777619u;
         }
 
@@ -554,7 +586,7 @@ namespace
                                                 vbase::StringView             assetBaseName = {})
     {
         const std::string relativeSourcePathStr(relativeSourcePath);
-        const std::string baseName =
+        std::string baseName =
             assetBaseName.size() == 0 ? importedAssetBaseName(relativeSourcePath) : std::string(assetBaseName);
 
         auto makeImportedPath = [&](const std::string& key) {
@@ -570,8 +602,15 @@ namespace
         return baseName + "_" + stableShortHash(relativeSourcePath);
     }
 
-    vasset::VAssetType inferSourceTextAssetType(const std::string& ext)
+    vasset::VAssetType inferSourceTextAssetType(const std::filesystem::path& path)
     {
+        if (isValidShaderLibraryManifest(path))
+            return vasset::VAssetType::eShaderLibraryManifest;
+        if (isValidScriptableObjectLua(path))
+            return vasset::VAssetType::eScriptableObjectLua;
+        if (isValidRenderGraphJson(path))
+            return vasset::VAssetType::eRenderGraphJson;
+        const auto ext = path.extension().generic_string();
         if (ext == ".vscn")
             return vasset::VAssetType::eScene;
         if (ext == ".vmanifest")
@@ -579,6 +618,416 @@ namespace
         if (ext == ".lua")
             return vasset::VAssetType::eScriptLua;
         return vasset::VAssetType::eUnknown;
+    }
+
+    struct ShaderLibraryManifest
+    {
+        std::string              name;
+        std::string              root;
+        std::string              keywords;
+        std::vector<std::string> shaders;
+    };
+
+    std::string bytesToString(const std::vector<uint8_t>& bytes)
+    {
+        return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+
+    std::optional<std::string> parseManifestStringField(const std::string& text, const char* field)
+    {
+        const std::regex pattern(std::string(field) + R"(\s*=\s*["']([^"']+)["'])");
+        std::smatch      match;
+        if (std::regex_search(text, match, pattern) && match.size() >= 2)
+            return match[1].str();
+        return std::nullopt;
+    }
+
+    std::vector<std::string> parseManifestStringArrayField(const std::string& text, const char* field)
+    {
+        const std::regex fieldPattern(std::string(field) + R"(\s*=\s*\{([\s\S]*?)\})");
+        std::smatch      fieldMatch;
+        if (!std::regex_search(text, fieldMatch, fieldPattern) || fieldMatch.size() < 2)
+            return {};
+
+        std::vector<std::string> out;
+        const std::string        body = fieldMatch[1].str();
+        const std::regex         itemPattern(R"(["']([^"']+)["'])");
+        for (std::sregex_iterator it(body.begin(), body.end(), itemPattern), end; it != end; ++it)
+            out.push_back((*it)[1].str());
+        return out;
+    }
+
+    std::optional<ShaderLibraryManifest> parseShaderLibraryManifest(const std::filesystem::path& path)
+    {
+        const auto bytes = readAll(path);
+        if (bytes.empty() && !std::filesystem::exists(path))
+            return std::nullopt;
+
+        const auto text = bytesToString(bytes);
+        ShaderLibraryManifest manifest;
+        manifest.name     = parseManifestStringField(text, "name").value_or(path.stem().stem().generic_string());
+        manifest.root     = parseManifestStringField(text, "root").value_or(path.parent_path().filename().generic_string());
+        manifest.keywords = parseManifestStringField(text, "keywords").value_or(std::string {});
+        manifest.shaders  = parseManifestStringArrayField(text, "shaders");
+        if (manifest.shaders.empty())
+            manifest.shaders.push_back("**/*.vshader");
+
+        if (manifest.name.empty() || manifest.root.empty())
+            return std::nullopt;
+        return manifest;
+    }
+
+    std::string globToRegex(std::string glob)
+    {
+        std::string out = "^";
+        for (size_t i = 0; i < glob.size(); ++i)
+        {
+            const char ch = glob[i];
+            if (ch == '*')
+            {
+                if (i + 1 < glob.size() && glob[i + 1] == '*')
+                {
+                    out += ".*";
+                    ++i;
+                }
+                else
+                {
+                    out += "[^/]*";
+                }
+            }
+            else if (ch == '?')
+            {
+                out += '.';
+            }
+            else
+            {
+                if (std::string(".^$+()[]{}|\\").find(ch) != std::string::npos)
+                    out += '\\';
+                out += ch == '\\' ? '/' : ch;
+            }
+        }
+        out += "$";
+        return out;
+    }
+
+    bool matchesGlob(const std::string& rel, const std::string& glob)
+    {
+        return std::regex_match(rel, std::regex(globToRegex(glob)));
+    }
+
+    std::vector<std::string> collectShaderManifestFiles(const std::filesystem::path& shaderRoot,
+                                                        const std::vector<std::string>& patterns)
+    {
+        std::vector<std::string> out;
+        if (!std::filesystem::exists(shaderRoot) || !std::filesystem::is_directory(shaderRoot))
+            return out;
+
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(shaderRoot))
+        {
+            if (!entry.is_regular_file() || entry.path().extension() != ".vshader")
+                continue;
+
+            auto rel = std::filesystem::relative(entry.path(), shaderRoot).generic_string();
+            for (const auto& pattern : patterns)
+            {
+                if (matchesGlob(rel, pattern))
+                {
+                    out.push_back(std::move(rel));
+                    break;
+                }
+            }
+        }
+        std::ranges::sort(out);
+        return out;
+    }
+
+    std::string quoteArg(const std::string& value)
+    {
+        std::string out = "\"";
+        for (const char ch : value)
+        {
+            if (ch == '"')
+                out += "\\\"";
+            else
+                out += ch;
+        }
+        out += "\"";
+        return out;
+    }
+
+    std::optional<vshadersystem::ShaderStage> shaderStageFromSection(std::string_view section)
+    {
+        if (section == "vert")
+            return vshadersystem::ShaderStage::eVert;
+        if (section == "frag")
+            return vshadersystem::ShaderStage::eFrag;
+        if (section == "comp")
+            return vshadersystem::ShaderStage::eComp;
+        return std::nullopt;
+    }
+
+    std::string shaderStageSuffix(vshadersystem::ShaderStage stage)
+    {
+        switch (stage)
+        {
+            case vshadersystem::ShaderStage::eVert:
+                return ".vert";
+            case vshadersystem::ShaderStage::eFrag:
+                return ".frag";
+            case vshadersystem::ShaderStage::eComp:
+                return ".comp";
+            default:
+                return {};
+        }
+    }
+
+    std::string trimCopy(std::string_view text)
+    {
+        const auto begin = text.find_first_not_of(" \t\r\n");
+        if (begin == std::string_view::npos)
+            return {};
+        const auto end = text.find_last_not_of(" \t\r\n");
+        return std::string(text.substr(begin, end - begin + 1));
+    }
+
+    std::unordered_map<std::string, std::string> parseVShaderSections(const std::string& text)
+    {
+        std::unordered_map<std::string, std::string> sections;
+        std::string current;
+        std::ostringstream body;
+
+        std::istringstream input(text);
+        std::string line;
+        auto flush = [&]() {
+            if (!current.empty())
+            {
+                sections[current] = body.str();
+                body.str({});
+                body.clear();
+            }
+        };
+
+        while (std::getline(input, line))
+        {
+            const auto trimmed = trimCopy(line);
+            if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']')
+            {
+                flush();
+                current = trimmed.substr(1, trimmed.size() - 2);
+                continue;
+            }
+
+            if (!current.empty())
+                body << line << '\n';
+        }
+        flush();
+        return sections;
+    }
+
+    std::string makeShaderSource(const std::unordered_map<std::string, std::string>& sections,
+                                 const std::string&                                 body)
+    {
+        int version = 460;
+        if (auto it = sections.find("vshader"); it != sections.end())
+        {
+            const std::regex versionPattern(R"(version\s*=\s*([0-9]+))");
+            std::smatch      match;
+            if (std::regex_search(it->second, match, versionPattern) && match.size() >= 2)
+                version = std::stoi(match[1].str());
+        }
+
+        std::ostringstream source;
+        source << "#version " << version << " core\n\n";
+        source << body;
+        return source.str();
+    }
+
+    bool runShaderCompiler(const std::filesystem::path& assetRoot,
+                           const ShaderLibraryManifest& manifest,
+                           const std::filesystem::path& output,
+                           const bool                   webgpu)
+    {
+        const auto shaderRoot = assetRoot / manifest.root;
+        const auto shaders    = collectShaderManifestFiles(shaderRoot, manifest.shaders);
+        if (shaders.empty())
+            return false;
+
+        std::vector<uint8_t> engineKeywords;
+        if (!manifest.keywords.empty())
+            engineKeywords = readAll(assetRoot / manifest.keywords);
+
+        std::vector<vshadersystem::ShaderLibraryEntry> entries;
+        for (const auto& shader : shaders)
+        {
+            const auto shaderPath = shaderRoot / shader;
+            const auto sourceBytes = readAll(shaderPath);
+            if (sourceBytes.empty())
+                return false;
+
+            const auto sourceText = bytesToString(sourceBytes);
+            const auto sections = parseVShaderSections(sourceText);
+            for (const auto& [section, body] : sections)
+            {
+                const auto stage = shaderStageFromSection(section);
+                if (!stage)
+                    continue;
+
+                const auto shaderId = vshadersystem::shader_id_from_virtual_path(shader);
+                vshadersystem::CompileOptions options;
+                options.stage = *stage;
+                options.webgpuProfile = webgpu;
+                options.materialAccessMode =
+                    webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
+                options.includeDirs.push_back(shaderRoot.generic_string());
+
+                vshadersystem::SourceInput input;
+                input.virtualPath = shader;
+                input.sourceText = makeShaderSource(sections, body);
+                auto compiled = vshadersystem::compile_glsl_to_spirv(input, options);
+                if (!compiled.isOk())
+                {
+                    std::cerr << "[vasset] shader compile failed: " << shader << " (" << compiled.error().message
+                              << ")" << std::endl;
+                    return false;
+                }
+
+                vshadersystem::VariantKey key;
+                key.setShaderId(shaderId);
+                key.setStage(*stage);
+
+                vshadersystem::ShaderBinary binary;
+                binary.contentHash = vshadersystem::xxhash64(sourceText);
+                binary.shaderIdHash = vshadersystem::shader_id_hash(shaderId);
+                binary.variantHash = key.build();
+                binary.spirvHash = vshadersystem::xxhash64_words(compiled.value().spirv);
+                binary.stage = *stage;
+                binary.reflection = compiled.value().reflection;
+                binary.spirv = std::move(compiled.value().spirv);
+
+                auto blob = vshadersystem::write_vshbin(binary);
+                if (!blob.isOk())
+                    return false;
+
+                entries.push_back(vshadersystem::ShaderLibraryEntry {
+                    .keyHash = binary.variantHash,
+                    .stage   = *stage,
+                    .blob    = std::move(blob.value()),
+                });
+            }
+        }
+
+        if (entries.empty())
+            return false;
+        std::filesystem::create_directories(output.parent_path());
+        auto result = vshadersystem::write_vslib(output.generic_string(), entries, engineKeywords.empty() ? nullptr : &engineKeywords);
+        if (!result.isOk())
+            std::cerr << "[vasset] failed to write shader library: " << output.generic_string() << " ("
+                      << result.error().message << ")" << std::endl;
+        return result.isOk();
+    }
+
+    bool shaderLibraryOutputsAreCurrent(const std::filesystem::path& assetRoot,
+                                        const std::filesystem::path& manifestPath,
+                                        const ShaderLibraryManifest& manifest,
+                                        const std::filesystem::path& outVulkan,
+                                        const std::filesystem::path& outWebGpu)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code ec;
+        if (!fs::exists(outVulkan, ec) || !fs::exists(outWebGpu, ec))
+            return false;
+
+        const auto outTime = std::min(fs::last_write_time(outVulkan, ec), fs::last_write_time(outWebGpu, ec));
+        if (ec)
+            return false;
+
+        auto dependencyIsNewer = [&](const fs::path& path) {
+            std::error_code depEc;
+            if (!fs::exists(path, depEc))
+                return false;
+            const auto depTime = fs::last_write_time(path, depEc);
+            return !depEc && depTime > outTime;
+        };
+
+        if (dependencyIsNewer(manifestPath))
+            return false;
+        if (!manifest.keywords.empty() && dependencyIsNewer(assetRoot / manifest.keywords))
+            return false;
+
+        const auto shaderRoot = assetRoot / manifest.root;
+        for (const auto& shader : collectShaderManifestFiles(shaderRoot, manifest.shaders))
+        {
+            if (dependencyIsNewer(shaderRoot / shader))
+                return false;
+        }
+
+        return true;
+    }
+
+    vbase::Result<void, vasset::AssetError> saveSourceVImport(const std::filesystem::path& assetRoot,
+                                                              const std::string&           relativeSrcPath,
+                                                              const vasset::VImport&       vimport)
+    {
+        auto sourceSidecarPath = assetRoot / relativeSrcPath;
+        sourceSidecarPath.replace_extension(".vimport");
+        return saveVImport(vimport, sourceSidecarPath.generic_string());
+    }
+
+    vbase::Result<vbase::UUID, vasset::AssetError>
+    importShaderLibraryManifest(vasset::VAssetRegistry& registry, vbase::StringView filePath, bool forceReimport)
+    {
+        namespace fs = std::filesystem;
+
+        fs::path osPath {std::string(filePath)};
+        if (!fs::exists(osPath) || fs::is_directory(osPath))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+
+        const auto manifest = parseShaderLibraryManifest(osPath);
+        if (!manifest)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eInvalidFormat);
+
+        const std::string relativeSrcPath = registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string importedBase =
+            registry.getImportedAssetPath(vasset::VAssetType::eShaderLibrary, manifest->name, true);
+        const std::string relativeImportedPath = fs::path(importedBase).replace_extension(".vshlib").generic_string();
+
+        const auto assetRoot = fs::path(registry.getAssetRootPath());
+        const auto outVulkan = assetRoot / relativeImportedPath;
+        const auto outWebGpu = fs::path(outVulkan).replace_extension(".vshweblib");
+
+        const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        vasset::VImport vimport {};
+        vimport.importer = vasset::toString(vasset::VAssetType::eShaderLibrary);
+        vimport.uid      = lookupUUID;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+
+        auto       entry      = registry.lookup(lookupUUID);
+        if (entry.type != vasset::VAssetType::eUnknown && !forceReimport &&
+            shaderLibraryOutputsAreCurrent(assetRoot, osPath, *manifest, outVulkan, outWebGpu))
+        {
+            // Editor sidecars live next to source files; imported/ contains cooked outputs only.
+            auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
+            if (!sr_import)
+                return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+            return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+        }
+
+        if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+        if (!runShaderCompiler(assetRoot, *manifest, outWebGpu, true))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+
+        auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
+        if (!sr_import)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+
+        auto rr = registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, vasset::VAssetType::eShaderLibrary);
+        if (!rr)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(rr.error());
+
+        return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
     }
 
     vbase::Result<vbase::UUID, vasset::AssetError> importSourceTextAsset(vasset::VAssetRegistry& registry,
@@ -598,9 +1047,21 @@ namespace
             registry.getImportedAssetPath(type, importedAssetKeyFromRelativeSource(relativeSrcPath, true), true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        vasset::VImport vimport {};
+        vimport.importer = vasset::toString(type);
+        vimport.uid      = lookupUUID;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+
         auto entry      = registry.lookup(lookupUUID);
         if (entry.type != vasset::VAssetType::eUnknown && !forceReimport)
+        {
+            // Keep source sidecars available even when the cooked copy is already current.
+            auto sr_import = saveSourceVImport(fs::path(registry.getAssetRootPath()), relativeSrcPath, vimport);
+            if (!sr_import)
+                return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
             return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+        }
 
         const auto srcBytes = readAll(osPath);
         if (srcBytes.empty() && !fs::exists(osPath))
@@ -610,15 +1071,7 @@ namespace
         if (!writeAll(importedPath, srcBytes))
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eIOError);
 
-        vasset::VImport vimport {};
-        vimport.importer = vasset::toString(type);
-        vimport.uid      = lookupUUID;
-        vimport.source   = relativeSrcPath;
-        vimport.output   = relativeImportedPath;
-
-        fs::path importSidecarPath = fs::path(registry.getAssetRootPath()) / relativeImportedPath;
-        importSidecarPath.replace_extension(".vimport");
-        auto sr_import = saveVImport(vimport, importSidecarPath.generic_string());
+        auto sr_import = saveSourceVImport(fs::path(registry.getAssetRootPath()), relativeSrcPath, vimport);
         if (!sr_import)
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
 
@@ -2141,10 +2594,22 @@ namespace vasset
                 }
                 ++importedSplats;
             }
-            else if (isValidSourceTextAsset(ext))
+            else if (isValidShaderLibraryManifest(entry.path()))
+            {
+                std::cout << "[vasset] shaderlib: " << relPath << std::endl;
+                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
+                if (!rr)
+                {
+                    std::cerr << "[vasset] failed shaderlib: " << relPath << " (" << assetErrorLabel(rr.error())
+                              << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(rr.error());
+                }
+                ++importedTextAssets;
+            }
+            else if (isValidSourceTextAsset(entry.path()))
             {
                 std::cout << "[vasset] text     : " << relPath << std::endl;
-                auto type = inferSourceTextAssetType(ext);
+                auto type = inferSourceTextAssetType(entry.path());
                 auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
                 if (!rr)
                 {
@@ -2208,9 +2673,17 @@ namespace vasset
             return vbase::Result<void, AssetError>::ok();
         }
 
-        if (isValidSourceTextAsset(ext))
+        if (isValidShaderLibraryManifest(osPath))
         {
-            auto type = inferSourceTextAssetType(ext);
+            auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
+            if (!rr)
+                return vbase::Result<void, AssetError>::err(rr.error());
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        if (isValidSourceTextAsset(osPath))
+        {
+            auto type = inferSourceTextAssetType(osPath);
             auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
             if (!rr)
                 return vbase::Result<void, AssetError>::err(rr.error());

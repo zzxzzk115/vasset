@@ -16,6 +16,10 @@ namespace vasset
         eScene,
         eSceneManifest,
         eScriptLua,
+        eScriptableObjectLua,
+        eRenderGraphJson,
+        eShaderLibraryManifest,
+        eShaderLibrary,
     };
 
     inline std::string toString(VAssetType type)
@@ -36,6 +40,14 @@ namespace vasset
                 return "scene_manifest";
             case VAssetType::eScriptLua:
                 return "script_lua";
+            case VAssetType::eScriptableObjectLua:
+                return "scriptable_object_lua";
+            case VAssetType::eRenderGraphJson:
+                return "render_graph_json";
+            case VAssetType::eShaderLibraryManifest:
+                return "shader_library_manifest";
+            case VAssetType::eShaderLibrary:
+                return "shader_library";
             case VAssetType::eUnknown:
             default:
                 return "unknown";
@@ -71,6 +83,22 @@ namespace vasset
         else if (typeStr == "script_lua")
         {
             return VAssetType::eScriptLua;
+        }
+        else if (typeStr == "scriptable_object_lua")
+        {
+            return VAssetType::eScriptableObjectLua;
+        }
+        else if (typeStr == "render_graph_json")
+        {
+            return VAssetType::eRenderGraphJson;
+        }
+        else if (typeStr == "shader_library_manifest")
+        {
+            return VAssetType::eShaderLibraryManifest;
+        }
+        else if (typeStr == "shader_library")
+        {
+            return VAssetType::eShaderLibrary;
         }
         else
         {
