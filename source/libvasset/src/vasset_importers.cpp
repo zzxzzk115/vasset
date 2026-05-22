@@ -1,4 +1,5 @@
 #include "vasset/vasset_importers.hpp"
+#include "vasset/vasset_import_database.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
 #include "vasset/vgaussiansplat.hpp"
@@ -23,6 +24,7 @@
 
 #define DDSKTX_IMPLEMENT
 #include <dds-ktx.h>
+#include <xxhash.h>
 
 #define TINYEXR_IMPLEMENTATION
 #include <tinyexr.h>
@@ -60,6 +62,10 @@
 
 namespace
 {
+    uint64_t hashString(const std::string& value, uint64_t seed = 0);
+    uint64_t hashU64(uint64_t value, uint64_t seed);
+    uint64_t hashFile(const std::filesystem::path& path, uint64_t seed = 0);
+
     std::string assetErrorLabel(vasset::AssetError error)
     {
         switch (error)
@@ -219,6 +225,142 @@ namespace
         });
     }
 
+    std::filesystem::path importDatabasePath(const vasset::VAssetRegistry& registry)
+    {
+        return std::filesystem::path(registry.getAssetRootPath()) / registry.getImportedFolderName() /
+               "asset_database.tsv";
+    }
+
+    vasset::VAssetImportDatabase loadImportDatabase(const vasset::VAssetRegistry& registry)
+    {
+        vasset::VAssetImportDatabase db;
+        (void)db.load(importDatabasePath(registry).generic_string());
+        return db;
+    }
+
+    bool outputFilesExist(const vasset::VAssetRegistry& registry, std::initializer_list<std::string> outputs)
+    {
+        const auto assetRoot = std::filesystem::path(registry.getAssetRootPath());
+        for (const auto& output : outputs)
+        {
+            std::error_code ec;
+            if (output.empty() || !std::filesystem::exists(assetRoot / output, ec))
+                return false;
+        }
+        return true;
+    }
+
+    bool outputFilesAreNewerThanSource(const vasset::VAssetRegistry& registry,
+                                       const std::filesystem::path&   source,
+                                       std::initializer_list<std::string> outputs)
+    {
+        const auto assetRoot = std::filesystem::path(registry.getAssetRootPath());
+        std::error_code ec;
+        if (!std::filesystem::exists(source, ec))
+            return false;
+        const auto sourceTime = std::filesystem::last_write_time(source, ec);
+        if (ec)
+            return false;
+
+        for (const auto& output : outputs)
+        {
+            const auto outputPath = assetRoot / output;
+            if (output.empty() || !std::filesystem::exists(outputPath, ec))
+                return false;
+            const auto outputTime = std::filesystem::last_write_time(outputPath, ec);
+            if (ec || outputTime < sourceTime)
+                return false;
+        }
+        return true;
+    }
+
+    bool importDatabaseRecordIsCurrent(const vasset::VAssetRegistry& registry,
+                                       const vbase::UUID&            uid,
+                                       const std::string&            importer,
+                                       const std::string&            source,
+                                       const std::string&            output,
+                                       const std::string&            importerVersion,
+                                       const std::string&            outputSchema,
+                                       uint64_t                      sourceHash,
+                                       uint64_t                      dependencyHash,
+                                       uint64_t                      paramsHash,
+                                       std::initializer_list<std::string> outputs)
+    {
+        if (!outputFilesExist(registry, outputs))
+            return false;
+
+        const auto db = loadImportDatabase(registry);
+        const auto* record = db.findBySource(source);
+        if (!record)
+            return false;
+
+        return record->uid == vbase::to_string(uid) && record->importer == importer && record->source == source &&
+               record->output == output && record->importerVersion == importerVersion &&
+               record->outputSchema == outputSchema && record->sourceHash == sourceHash &&
+               record->dependencyHash == dependencyHash && record->paramsHash == paramsHash;
+    }
+
+    bool importDatabaseHasRecord(const vasset::VAssetRegistry& registry, const std::string& source)
+    {
+        const auto db = loadImportDatabase(registry);
+        return db.findBySource(source) != nullptr;
+    }
+
+    vbase::Result<void, vasset::AssetError> updateImportDatabaseRecord(const vasset::VAssetRegistry& registry,
+                                                                       const vbase::UUID&            uid,
+                                                                       const std::string&            importer,
+                                                                       const std::string&            source,
+                                                                       const std::string&            output,
+                                                                       const std::string&            importerVersion,
+                                                                       const std::string&            outputSchema,
+                                                                       uint64_t                      sourceHash,
+                                                                       uint64_t                      dependencyHash,
+                                                                       uint64_t                      paramsHash)
+    {
+        auto db = loadImportDatabase(registry);
+
+        vasset::VAssetImportDatabase::Record record {};
+        record.uid             = vbase::to_string(uid);
+        record.importer        = importer;
+        record.source          = source;
+        record.output          = output;
+        record.importerVersion = importerVersion;
+        record.outputSchema    = outputSchema;
+        record.sourceHash      = sourceHash;
+        record.dependencyHash  = dependencyHash;
+        record.paramsHash      = paramsHash;
+
+        db.upsert(std::move(record));
+        return db.save(importDatabasePath(registry).generic_string());
+    }
+
+    uint64_t textureImportParamsHash(const vasset::VTextureImporter::ImportOptions& options)
+    {
+        uint64_t h = hashString("texture-params");
+        h = hashU64(options.generateMipmaps ? 1u : 0u, h);
+        h = hashU64(options.flipY ? 1u : 0u, h);
+        h = hashU64(static_cast<uint64_t>(options.targetTextureFileFormat), h);
+        h = hashU64(options.uastc ? 1u : 0u, h);
+        h = hashU64(options.noSSE ? 1u : 0u, h);
+        h = hashU64(options.qualityLevel, h);
+        h = hashU64(options.compressionLevel, h);
+        h = hashU64(options.basisUThreadCount, h);
+        h = hashU64(options.compressOnlyLargeTextures ? 1u : 0u, h);
+        h = hashU64(options.basisUCompressMinDimension, h);
+        h = hashU64(options.basisUCompressMinSourceBytes, h);
+        return h;
+    }
+
+    uint64_t meshImportParamsHash(const vasset::VMeshImporter::ImportOptions& options)
+    {
+        return hashU64(options.generateMeshlets ? 1u : 0u, hashString("mesh-params"));
+    }
+
+    uint64_t gaussianSplatImportParamsHash(const vasset::VGaussianSplatImporter::ImportOptions& options)
+    {
+        return hashU64(static_cast<uint64_t>(options.zstdLevel), hashString("gaussian-splat-params"));
+    }
+
     vasset::VTextureFormat toVTextureFormat(ddsktx_format format)
     {
         switch (format)
@@ -335,6 +477,31 @@ namespace
         if (!f.read(reinterpret_cast<char*>(data.data()), sz))
             return {};
         return data;
+    }
+
+    uint64_t hashBytes(const void* data, size_t size, uint64_t seed = 0)
+    {
+        return XXH3_64bits_withSeed(data, size, seed);
+    }
+
+    uint64_t hashString(const std::string& value, uint64_t seed)
+    {
+        return hashBytes(value.data(), value.size(), seed);
+    }
+
+    uint64_t hashFile(const std::filesystem::path& path, uint64_t seed)
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) || std::filesystem::is_directory(path, ec))
+            return hashString("<missing>:" + path.generic_string(), seed);
+
+        const auto bytes = readAll(path);
+        return hashBytes(bytes.data(), bytes.size(), seed);
+    }
+
+    uint64_t hashU64(uint64_t value, uint64_t seed)
+    {
+        return hashBytes(&value, sizeof(value), seed);
     }
 
     bool writeAll(const std::filesystem::path& p, const std::vector<uint8_t>& data)
@@ -741,6 +908,24 @@ namespace
         return out;
     }
 
+    uint64_t shaderLibraryDependencyHash(const std::filesystem::path& assetRoot,
+                                         const ShaderLibraryManifest&  manifest)
+    {
+        uint64_t h = hashString("shader-library-deps");
+
+        if (!manifest.keywords.empty())
+            h = hashFile(assetRoot / manifest.keywords, h);
+
+        const auto shaderRoot = assetRoot / manifest.root;
+        for (const auto& shader : collectShaderManifestFiles(shaderRoot, manifest.shaders))
+        {
+            h = hashString(shader, h);
+            h = hashFile(shaderRoot / shader, h);
+        }
+
+        return h;
+    }
+
     std::string quoteArg(const std::string& value)
     {
         std::string out = "\"";
@@ -995,6 +1180,7 @@ namespace
         const auto assetRoot = fs::path(registry.getAssetRootPath());
         const auto outVulkan = assetRoot / relativeImportedPath;
         const auto outWebGpu = fs::path(outVulkan).replace_extension(".vshweblib");
+        const auto relativeWebGpuPath = fs::relative(outWebGpu, assetRoot).generic_string();
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         vasset::VImport vimport {};
@@ -1003,15 +1189,45 @@ namespace
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
 
+        const uint64_t sourceHash     = hashFile(osPath);
+        const uint64_t dependencyHash = shaderLibraryDependencyHash(assetRoot, *manifest);
+        constexpr uint64_t paramsHash = 0;
+        constexpr auto importerVersion = "shader_library:1";
+        constexpr auto outputSchema = "vshlib:v4+vshweblib:1";
+
         auto       entry      = registry.lookup(lookupUUID);
         if (entry.type != vasset::VAssetType::eUnknown && !forceReimport &&
             shaderLibraryOutputsAreCurrent(assetRoot, osPath, *manifest, outVulkan, outWebGpu))
         {
-            // Editor sidecars live next to source files; imported/ contains cooked outputs only.
-            auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
-            if (!sr_import)
-                return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
-            return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+            if (importDatabaseRecordIsCurrent(registry,
+                                              lookupUUID,
+                                              vasset::toString(vasset::VAssetType::eShaderLibrary),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath, relativeWebGpuPath}) ||
+                !importDatabaseHasRecord(registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(registry,
+                                                 lookupUUID,
+                                                 vasset::toString(vasset::VAssetType::eShaderLibrary),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                // Editor sidecars live next to source files; imported/ contains cooked outputs only.
+                auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
+                if (!sr_import)
+                    return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+                return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+            }
         }
 
         if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false))
@@ -1026,6 +1242,19 @@ namespace
         auto rr = registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, vasset::VAssetType::eShaderLibrary);
         if (!rr)
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(registry,
+                                             lookupUUID,
+                                             vasset::toString(vasset::VAssetType::eShaderLibrary),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(dr.error());
 
         return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
     }
@@ -1053,14 +1282,45 @@ namespace
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
 
+        const uint64_t sourceHash     = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        constexpr uint64_t paramsHash = 0;
+        constexpr auto importerVersion = "source_text:1";
+        constexpr auto outputSchema = "copy:1";
+
         auto entry      = registry.lookup(lookupUUID);
-        if (entry.type != vasset::VAssetType::eUnknown && !forceReimport)
+        if (entry.type != vasset::VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(registry, osPath, {relativeImportedPath}))
         {
-            // Keep source sidecars available even when the cooked copy is already current.
-            auto sr_import = saveSourceVImport(fs::path(registry.getAssetRootPath()), relativeSrcPath, vimport);
-            if (!sr_import)
-                return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
-            return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+            if (importDatabaseRecordIsCurrent(registry,
+                                              lookupUUID,
+                                              vasset::toString(type),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}) ||
+                !importDatabaseHasRecord(registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(registry,
+                                                 lookupUUID,
+                                                 vasset::toString(type),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                // Keep source sidecars available even when the cooked copy is already current.
+                auto sr_import = saveSourceVImport(fs::path(registry.getAssetRootPath()), relativeSrcPath, vimport);
+                if (!sr_import)
+                    return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+                return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
+            }
         }
 
         const auto srcBytes = readAll(osPath);
@@ -1078,6 +1338,19 @@ namespace
         auto rr = registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, type);
         if (!rr)
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(registry,
+                                             lookupUUID,
+                                             vasset::toString(type),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(dr.error());
 
         return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
     }
@@ -1287,12 +1560,43 @@ namespace vasset
                 true);
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        const uint64_t sourceHash     = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        const uint64_t paramsHash     = textureImportParamsHash(m_Options);
+        constexpr auto importerVersion = "texture:1";
+        constexpr auto outputSchema = "vtexture:1";
+
         auto       entry      = m_Registry.lookup(lookupUUID);
-        if (entry.type != VAssetType::eUnknown && !forceReimport)
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeImportedPath}))
         {
-            // Load existing texture
-            std::cout << "Texture already imported: " << entry.sourcePath << std::endl;
-            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              lookupUUID,
+                                              toString(VAssetType::eTexture),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}) ||
+                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 lookupUUID,
+                                                 toString(VAssetType::eTexture),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                // Load existing texture
+                std::cout << "Texture already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            }
         }
 
         // Set UUID
@@ -1710,7 +2014,6 @@ namespace vasset
         vimport.uid      = outTexture.uuid;
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
-        // TODO: params
         auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
@@ -1719,6 +2022,19 @@ namespace vasset
             m_Registry.registerAsset(outTexture.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eTexture);
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             outTexture.uuid,
+                                             toString(VAssetType::eTexture),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
         return vbase::Result<vbase::UUID, AssetError>::ok(outTexture.uuid);
     }
 
@@ -1746,12 +2062,43 @@ namespace vasset
                                             true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        const uint64_t sourceHash     = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        const uint64_t paramsHash     = meshImportParamsHash(m_Options);
+        constexpr auto importerVersion = "mesh:1";
+        constexpr auto outputSchema = "vmesh:3";
+
         auto entry      = m_Registry.lookup(lookupUUID);
-        if (entry.type != VAssetType::eUnknown && !forceReimport)
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeImportedPath}))
         {
-            // Load existing mesh
-            std::cout << "Mesh already imported: " << entry.sourcePath << std::endl;
-            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              lookupUUID,
+                                              toString(VAssetType::eMesh),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}) ||
+                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 lookupUUID,
+                                                 toString(VAssetType::eMesh),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                // Load existing mesh
+                std::cout << "Mesh already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            }
         }
 
         // Set UUID
@@ -1812,7 +2159,6 @@ namespace vasset
         vimport.uid      = outMesh.uuid;
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
-        // TODO: params
         auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
@@ -1820,6 +2166,19 @@ namespace vasset
         auto rr = m_Registry.registerAsset(outMesh.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eMesh);
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             outMesh.uuid,
+                                             toString(VAssetType::eMesh),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
         return vbase::Result<vbase::UUID, AssetError>::ok(outMesh.uuid);
     }
 
@@ -2397,11 +2756,42 @@ namespace vasset
                 true);
 
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        const uint64_t sourceHash     = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        const uint64_t paramsHash     = gaussianSplatImportParamsHash(m_Options);
+        constexpr auto importerVersion = "gaussian_splat:1";
+        constexpr auto outputSchema = "vgaussiansplat:1";
+
         auto entry      = m_Registry.lookup(lookupUUID);
-        if (entry.type != VAssetType::eUnknown && !forceReimport)
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeImportedPath}))
         {
-            std::cout << "GaussianSplat already imported: " << entry.sourcePath << std::endl;
-            return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              lookupUUID,
+                                              toString(VAssetType::eGaussianSplat),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}) ||
+                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 lookupUUID,
+                                                 toString(VAssetType::eGaussianSplat),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                std::cout << "GaussianSplat already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            }
         }
 
         outSplat                = {};
@@ -2499,6 +2889,19 @@ namespace vasset
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
 
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             lookupUUID,
+                                             toString(VAssetType::eGaussianSplat),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
+
         return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
     }
 
@@ -2519,16 +2922,48 @@ namespace vasset
         if (!std::filesystem::exists(osPath) || !std::filesystem::is_directory(osPath))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
+        enum class CandidateKind
+        {
+            eTexture,
+            eMesh,
+            eSplat,
+            eShaderLibrary,
+            eText,
+        };
+
+        struct ImportCandidate
+        {
+            std::filesystem::path path;
+            std::string           relativePath;
+            std::string           extension;
+            CandidateKind         kind {CandidateKind::eText};
+        };
+
+        auto notifyProgress = [this](ImportProgress::Phase phase,
+                                     size_t                processedFiles,
+                                     size_t                totalFiles,
+                                     const std::string&    currentPath = std::string {}) {
+            if (m_Options.progress)
+            {
+                m_Options.progress(ImportProgress {.phase          = phase,
+                                                   .processedFiles = processedFiles,
+                                                   .totalFiles     = totalFiles,
+                                                   .currentPath    = currentPath});
+            }
+        };
+
         size_t scannedRegularFiles = 0;
         size_t skippedFiles        = 0;
         size_t importedTextures    = 0;
         size_t importedMeshes      = 0;
         size_t importedSplats      = 0;
         size_t importedTextAssets  = 0;
+        std::vector<ImportCandidate> candidates;
 
         const auto ignoredDirectories = makeIgnoredAssetImportDirectories(m_Registry, m_Options);
 
         std::cout << "[vasset] scanning asset folder: " << osPath.generic_string() << std::endl;
+        notifyProgress(ImportProgress::Phase::eScan, 0, 0);
 
         for (auto it = std::filesystem::recursive_directory_iterator(osPath);
              it != std::filesystem::recursive_directory_iterator();
@@ -2557,77 +2992,111 @@ namespace vasset
 
             if (isValidTexture(ext))
             {
-                std::cout << "[vasset] texture  : " << relPath << std::endl;
-                VTexture texture;
-                auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
-                if (!tr)
-                {
-                    std::cerr << "[vasset] failed texture  : " << relPath << " (" << assetErrorLabel(tr.error())
-                              << ")" << std::endl;
-                    return vbase::Result<void, AssetError>::err(tr.error());
-                }
-                ++importedTextures;
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eTexture});
             }
             else if (isValidModel(ext))
             {
-                std::cout << "[vasset] mesh     : " << relPath << std::endl;
-                VMesh mesh;
-                auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
-                if (!mr)
-                {
-                    std::cerr << "[vasset] failed mesh     : " << relPath << " (" << assetErrorLabel(mr.error())
-                              << ")" << std::endl;
-                    return vbase::Result<void, AssetError>::err(mr.error());
-                }
-                ++importedMeshes;
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eMesh});
             }
             else if (isValidGaussianSplat(ext))
             {
-                std::cout << "[vasset] splat    : " << relPath << std::endl;
-                VGaussianSplat splat;
-                auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
-                if (!gr)
-                {
-                    std::cerr << "[vasset] failed splat    : " << relPath << " (" << assetErrorLabel(gr.error())
-                              << ")" << std::endl;
-                    return vbase::Result<void, AssetError>::err(gr.error());
-                }
-                ++importedSplats;
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eSplat});
             }
             else if (isValidShaderLibraryManifest(entry.path()))
             {
-                std::cout << "[vasset] shaderlib: " << relPath << std::endl;
-                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
-                if (!rr)
-                {
-                    std::cerr << "[vasset] failed shaderlib: " << relPath << " (" << assetErrorLabel(rr.error())
-                              << ")" << std::endl;
-                    return vbase::Result<void, AssetError>::err(rr.error());
-                }
-                ++importedTextAssets;
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eShaderLibrary});
             }
             else if (isValidSourceTextAsset(entry.path()))
             {
-                std::cout << "[vasset] text     : " << relPath << std::endl;
-                auto type = inferSourceTextAssetType(entry.path());
-                auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
-                if (!rr)
-                {
-                    std::cerr << "[vasset] failed text     : " << relPath << " (" << assetErrorLabel(rr.error())
-                              << ")" << std::endl;
-                    return vbase::Result<void, AssetError>::err(rr.error());
-                }
-                ++importedTextAssets;
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eText});
             }
             else
             {
                 ++skippedFiles;
             }
+            notifyProgress(ImportProgress::Phase::eScan, scannedRegularFiles, 0, relPath);
+        }
+
+        notifyProgress(ImportProgress::Phase::eImport, 0, candidates.size());
+
+        for (size_t index = 0; index < candidates.size(); ++index)
+        {
+            const auto& candidate = candidates[index];
+            const auto  filePath  = candidate.path.generic_string();
+            notifyProgress(ImportProgress::Phase::eImport, index, candidates.size(), candidate.relativePath);
+
+            if (candidate.kind == CandidateKind::eTexture)
+            {
+                std::cout << "[vasset] texture  : " << candidate.relativePath << std::endl;
+                VTexture texture;
+                auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
+                if (!tr)
+                {
+                    std::cerr << "[vasset] failed texture  : " << candidate.relativePath << " ("
+                              << assetErrorLabel(tr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(tr.error());
+                }
+                ++importedTextures;
+            }
+            else if (candidate.kind == CandidateKind::eMesh)
+            {
+                std::cout << "[vasset] mesh     : " << candidate.relativePath << std::endl;
+                VMesh mesh;
+                auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
+                if (!mr)
+                {
+                    std::cerr << "[vasset] failed mesh     : " << candidate.relativePath << " ("
+                              << assetErrorLabel(mr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(mr.error());
+                }
+                ++importedMeshes;
+            }
+            else if (candidate.kind == CandidateKind::eSplat)
+            {
+                std::cout << "[vasset] splat    : " << candidate.relativePath << std::endl;
+                VGaussianSplat splat;
+                auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
+                if (!gr)
+                {
+                    std::cerr << "[vasset] failed splat    : " << candidate.relativePath << " ("
+                              << assetErrorLabel(gr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(gr.error());
+                }
+                ++importedSplats;
+            }
+            else if (candidate.kind == CandidateKind::eShaderLibrary)
+            {
+                std::cout << "[vasset] shaderlib: " << candidate.relativePath << std::endl;
+                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
+                if (!rr)
+                {
+                    std::cerr << "[vasset] failed shaderlib: " << candidate.relativePath << " ("
+                              << assetErrorLabel(rr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(rr.error());
+                }
+                ++importedTextAssets;
+            }
+            else if (candidate.kind == CandidateKind::eText)
+            {
+                std::cout << "[vasset] text     : " << candidate.relativePath << std::endl;
+                auto type = inferSourceTextAssetType(candidate.path);
+                auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
+                if (!rr)
+                {
+                    std::cerr << "[vasset] failed text     : " << candidate.relativePath << " ("
+                              << assetErrorLabel(rr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(rr.error());
+                }
+                ++importedTextAssets;
+            }
+
+            notifyProgress(ImportProgress::Phase::eImport, index + 1, candidates.size(), candidate.relativePath);
         }
 
         std::cout << "[vasset] summary  : scanned=" << scannedRegularFiles << ", textures=" << importedTextures
                   << ", meshes=" << importedMeshes << ", splats=" << importedSplats
                   << ", text_assets=" << importedTextAssets << ", skipped=" << skippedFiles << std::endl;
+        notifyProgress(ImportProgress::Phase::eDone, candidates.size(), candidates.size());
 
         return vbase::Result<void, AssetError>::ok();
     }

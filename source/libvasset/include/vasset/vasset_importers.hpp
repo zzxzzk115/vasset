@@ -10,6 +10,7 @@
 
 #include <assimp/scene.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -108,9 +109,25 @@ namespace vasset
     class VAssetImporter
     {
     public:
+        struct ImportProgress
+        {
+            enum class Phase
+            {
+                eScan,
+                eImport,
+                eDone,
+            };
+
+            Phase       phase {Phase::eScan};
+            size_t      processedFiles {0};
+            size_t      totalFiles {0};
+            std::string currentPath;
+        };
+
         struct ImportOptions
         {
             std::vector<std::string> ignoredDirectories;
+            std::function<void(const ImportProgress&)> progress;
         };
 
         VAssetImporter(VAssetRegistry& registry);
