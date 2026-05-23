@@ -10,11 +10,11 @@
 #include <ktx.h>
 
 #include <vshadersystem/binary.hpp>
-#include <vshadersystem/compiler.hpp>
+#include <vshadersystem/engine_keywords.hpp>
 #include <vshadersystem/hash.hpp>
 #include <vshadersystem/library.hpp>
 #include <vshadersystem/shader_id.hpp>
-#include <vshadersystem/variant_key.hpp>
+#include <vshadersystem/system.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -926,107 +926,6 @@ namespace
         return h;
     }
 
-    std::string quoteArg(const std::string& value)
-    {
-        std::string out = "\"";
-        for (const char ch : value)
-        {
-            if (ch == '"')
-                out += "\\\"";
-            else
-                out += ch;
-        }
-        out += "\"";
-        return out;
-    }
-
-    std::optional<vshadersystem::ShaderStage> shaderStageFromSection(std::string_view section)
-    {
-        if (section == "vert")
-            return vshadersystem::ShaderStage::eVert;
-        if (section == "frag")
-            return vshadersystem::ShaderStage::eFrag;
-        if (section == "comp")
-            return vshadersystem::ShaderStage::eComp;
-        return std::nullopt;
-    }
-
-    std::string shaderStageSuffix(vshadersystem::ShaderStage stage)
-    {
-        switch (stage)
-        {
-            case vshadersystem::ShaderStage::eVert:
-                return ".vert";
-            case vshadersystem::ShaderStage::eFrag:
-                return ".frag";
-            case vshadersystem::ShaderStage::eComp:
-                return ".comp";
-            default:
-                return {};
-        }
-    }
-
-    std::string trimCopy(std::string_view text)
-    {
-        const auto begin = text.find_first_not_of(" \t\r\n");
-        if (begin == std::string_view::npos)
-            return {};
-        const auto end = text.find_last_not_of(" \t\r\n");
-        return std::string(text.substr(begin, end - begin + 1));
-    }
-
-    std::unordered_map<std::string, std::string> parseVShaderSections(const std::string& text)
-    {
-        std::unordered_map<std::string, std::string> sections;
-        std::string current;
-        std::ostringstream body;
-
-        std::istringstream input(text);
-        std::string line;
-        auto flush = [&]() {
-            if (!current.empty())
-            {
-                sections[current] = body.str();
-                body.str({});
-                body.clear();
-            }
-        };
-
-        while (std::getline(input, line))
-        {
-            const auto trimmed = trimCopy(line);
-            if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']')
-            {
-                flush();
-                current = trimmed.substr(1, trimmed.size() - 2);
-                continue;
-            }
-
-            if (!current.empty())
-                body << line << '\n';
-        }
-        flush();
-        return sections;
-    }
-
-    std::string makeShaderSource(const std::unordered_map<std::string, std::string>& sections,
-                                 const std::string&                                 body)
-    {
-        int version = 460;
-        if (auto it = sections.find("vshader"); it != sections.end())
-        {
-            const std::regex versionPattern(R"(version\s*=\s*([0-9]+))");
-            std::smatch      match;
-            if (std::regex_search(it->second, match, versionPattern) && match.size() >= 2)
-                version = std::stoi(match[1].str());
-        }
-
-        std::ostringstream source;
-        source << "#version " << version << " core\n\n";
-        source << body;
-        return source.str();
-    }
-
     bool runShaderCompiler(const std::filesystem::path& assetRoot,
                            const ShaderLibraryManifest& manifest,
                            const std::filesystem::path& output,
@@ -1037,9 +936,23 @@ namespace
         if (shaders.empty())
             return false;
 
-        std::vector<uint8_t> engineKeywords;
+        std::vector<uint8_t> engineKeywordsBytes;
         if (!manifest.keywords.empty())
-            engineKeywords = readAll(assetRoot / manifest.keywords);
+            engineKeywordsBytes = readAll(assetRoot / manifest.keywords);
+
+        std::optional<vshadersystem::EngineKeywordsFile> engineKeywords;
+        if (!engineKeywordsBytes.empty())
+        {
+            const auto text = bytesToString(engineKeywordsBytes);
+            auto       parsed = vshadersystem::parse_engine_keywords_vkw(text);
+            if (!parsed.isOk())
+            {
+                std::cerr << "[vasset] failed to parse shader keywords: " << manifest.keywords << " ("
+                          << parsed.error().message << ")" << std::endl;
+                return false;
+            }
+            engineKeywords = std::move(parsed.value());
+        }
 
         std::vector<vshadersystem::ShaderLibraryEntry> entries;
         for (const auto& shader : shaders)
@@ -1050,52 +963,39 @@ namespace
                 return false;
 
             const auto sourceText = bytesToString(sourceBytes);
-            const auto sections = parseVShaderSections(sourceText);
-            for (const auto& [section, body] : sections)
+
+            vshadersystem::BuildRequest request;
+            request.source.virtualPath = shader;
+            request.source.sourceText = sourceText;
+            request.options.language = vshadersystem::ShaderLanguage::eGLSL;
+            request.options.webgpuProfile = webgpu;
+            request.options.materialAccessMode =
+                webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
+            request.options.includeDirs.push_back(shaderRoot.generic_string());
+            request.enableCache = false;
+            if (engineKeywords)
             {
-                const auto stage = shaderStageFromSection(section);
-                if (!stage)
-                    continue;
+                request.hasEngineKeywords = true;
+                request.engineKeywords = *engineKeywords;
+            }
 
-                const auto shaderId = vshadersystem::shader_id_from_virtual_path(shader);
-                vshadersystem::CompileOptions options;
-                options.stage = *stage;
-                options.webgpuProfile = webgpu;
-                options.materialAccessMode =
-                    webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
-                options.includeDirs.push_back(shaderRoot.generic_string());
+            auto built = vshadersystem::build_multiple_shaders(request);
+            if (!built.isOk())
+            {
+                std::cerr << "[vasset] shader compile failed: " << shader << " (" << built.error().message
+                          << ")" << std::endl;
+                return false;
+            }
 
-                vshadersystem::SourceInput input;
-                input.virtualPath = shader;
-                input.sourceText = makeShaderSource(sections, body);
-                auto compiled = vshadersystem::compile_glsl_to_spirv(input, options);
-                if (!compiled.isOk())
-                {
-                    std::cerr << "[vasset] shader compile failed: " << shader << " (" << compiled.error().message
-                              << ")" << std::endl;
-                    return false;
-                }
-
-                vshadersystem::VariantKey key;
-                key.setShaderId(shaderId);
-                key.setStage(*stage);
-
-                vshadersystem::ShaderBinary binary;
-                binary.contentHash = vshadersystem::xxhash64(sourceText);
-                binary.shaderIdHash = vshadersystem::shader_id_hash(shaderId);
-                binary.variantHash = key.build();
-                binary.spirvHash = vshadersystem::xxhash64_words(compiled.value().spirv);
-                binary.stage = *stage;
-                binary.reflection = compiled.value().reflection;
-                binary.spirv = std::move(compiled.value().spirv);
-
-                auto blob = vshadersystem::write_vshbin(binary);
+            for (auto& [stage, result] : built.value())
+            {
+                auto blob = vshadersystem::write_vshbin(result.binary);
                 if (!blob.isOk())
                     return false;
 
                 entries.push_back(vshadersystem::ShaderLibraryEntry {
-                    .keyHash = binary.variantHash,
-                    .stage   = *stage,
+                    .keyHash = result.binary.variantHash,
+                    .stage   = stage,
                     .blob    = std::move(blob.value()),
                 });
             }
@@ -1104,7 +1004,9 @@ namespace
         if (entries.empty())
             return false;
         std::filesystem::create_directories(output.parent_path());
-        auto result = vshadersystem::write_vslib(output.generic_string(), entries, engineKeywords.empty() ? nullptr : &engineKeywords);
+        auto result = vshadersystem::write_vslib(output.generic_string(),
+                                                 entries,
+                                                 engineKeywordsBytes.empty() ? nullptr : &engineKeywordsBytes);
         if (!result.isOk())
             std::cerr << "[vasset] failed to write shader library: " << output.generic_string() << " ("
                       << result.error().message << ")" << std::endl;

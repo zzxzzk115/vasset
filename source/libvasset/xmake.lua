@@ -3,7 +3,7 @@ local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or
 
 if enable_import_targets then
     add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = not is_plat("wasm")}})
-    add_requires("vshadersystem v0.8.4", {configs = { debug = is_mode("debug") }})
+    add_requires("vshadersystem v0.9.0", {configs = { debug = is_mode("debug") }})
 end
 if is_plat("windows") then
     add_requires("ktx-windows")
