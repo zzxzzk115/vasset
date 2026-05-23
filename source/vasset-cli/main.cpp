@@ -18,6 +18,9 @@ using namespace vasset;
 
 namespace
 {
+    bool isRuntimeRawAssetPath(const std::string& relPath);
+    bool shouldPackSourcePayloadForEntry(const VAssetRegistry::AssetEntry& entry);
+
     std::string packLogicalPathForEntry(const VAssetRegistry::AssetEntry& entry)
     {
         if (!entry.sourcePath.empty())
@@ -30,6 +33,17 @@ namespace
         if (!entry.importedPath.empty())
             return entry.importedPath;
         return entry.sourcePath;
+    }
+
+    std::string packDataPathForEntry(const VAssetRegistry::AssetEntry& entry, const std::filesystem::path& assetRoot)
+    {
+        if (!entry.sourcePath.empty() && shouldPackSourcePayloadForEntry(entry))
+        {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(assetRoot / entry.sourcePath, ec))
+                return entry.sourcePath;
+        }
+        return packDataPathForEntry(entry);
     }
 
     std::vector<std::byte> readBinaryFile(const std::filesystem::path& filePath)
@@ -93,6 +107,12 @@ namespace
         });
 
         return ext == ".vscn" || ext == ".vmanifest" || ext == ".lua";
+    }
+
+    bool shouldPackSourcePayloadForEntry(const VAssetRegistry::AssetEntry& entry)
+    {
+        return entry.type == VAssetType::eScene || entry.type == VAssetType::eSceneManifest ||
+               entry.type == VAssetType::eScriptLua;
     }
 
     bool validateTexturePayloadForPack(std::string_view              cookedPath,
@@ -551,6 +571,7 @@ static int cmd_pack(int argc, char** argv)
         registry.setImportedFolderName("imported");
 
         std::vector<VpkWriteItem> items;
+        std::unordered_set<std::string> packedLogicalPaths;
         for (const auto& [uuidStr, entry] : registry.getRegistry())
         {
             const std::string logicalPath = packLogicalPathForEntry(entry);
@@ -559,7 +580,8 @@ static int cmd_pack(int argc, char** argv)
             if (!matchesPackFilters(logicalPath, includePaths))
                 continue;
 
-            const std::string      filePath = (fs::path(assetRoot) / packDataPathForEntry(entry)).generic_string();
+            const std::string filePath =
+                (fs::path(assetRoot) / packDataPathForEntry(entry, fs::path(assetRoot))).generic_string();
             std::vector<std::byte> data     = readBinaryFile(filePath);
             if (data.empty() && !fs::exists(filePath))
             {
@@ -575,6 +597,51 @@ static int cmd_pack(int argc, char** argv)
                 it.uuid = vbase::uuid_from_string_key(logicalPath);
             it.bytes         = std::move(data);
             it.allowCompress = true;
+            packedLogicalPaths.insert(logicalPath);
+            items.push_back(std::move(it));
+        }
+
+        for (const auto& entry : fs::recursive_directory_iterator(fs::path(assetRoot)))
+        {
+            if (!entry.is_regular_file())
+                continue;
+
+            const fs::path& p = entry.path();
+            if (p.extension() == ".vimport")
+                continue;
+
+            const std::string relPath = fs::relative(p, fs::path(assetRoot)).generic_string();
+            if (relPath.empty())
+                continue;
+
+            if (relPath.rfind("imported/", 0) == 0 || relPath == "imported")
+                continue;
+
+            if (relPath.size() >= 4 && relPath.substr(relPath.size() - 4) == ".vpk")
+                continue;
+
+            if (!isRuntimeRawAssetPath(relPath))
+                continue;
+
+            if (packedLogicalPaths.contains(relPath))
+                continue;
+            if (!matchesPackFilters(relPath, includePaths))
+                continue;
+
+            std::vector<std::byte> data = readBinaryFile(p);
+            if (data.empty() && !fs::exists(p))
+            {
+                std::cerr << "Missing raw file: " << p.generic_string() << std::endl;
+                continue;
+            }
+
+            VpkWriteItem it;
+            it.logicalPath   = relPath;
+            it.uuid          = vbase::uuid_from_string_key(relPath);
+            it.bytes         = std::move(data);
+            it.allowCompress = true;
+
+            packedLogicalPaths.insert(relPath);
             items.push_back(std::move(it));
         }
 
