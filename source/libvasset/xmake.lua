@@ -3,7 +3,7 @@ local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or
 
 if enable_import_targets then
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
-    add_requires("vshadersystem v0.9.1", {configs = { debug = is_mode("debug") }})
+    add_requires("vshadersystem v0.9.2", {configs = { debug = is_mode("debug") }})
 end
 if is_plat("windows") then
     add_requires("ktx-windows", {configs = {shared = false}})
@@ -27,10 +27,12 @@ local runtime_headers = {
 
 local import_headers = {
     "include/(vasset/editor_filesystem.hpp)",
+    "include/(vasset/tool_c_api.h)",
     "include/(vasset/vasset.hpp)",
     "include/(vasset/vasset_import_database.hpp)",
     "include/(vasset/vasset_import.hpp)",
     "include/(vasset/vasset_importers.hpp)",
+    "include/(vasset/tool_cli.hpp)",
     "include/(vasset/vimport.hpp)",
 }
 
@@ -71,7 +73,7 @@ if enable_import_targets then
         end
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
-        add_files("src/editor_filesystem.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
+        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", "vshadersystem", { public = true })
         if is_mode("debug") then
