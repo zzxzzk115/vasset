@@ -2,13 +2,13 @@ add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
 local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or has_config("vasset_enable_wasm_import"))
 
 if enable_import_targets then
-    add_requires("assimp", {configs = {shared = true, debug = is_mode("debug"), draco = not is_plat("wasm")}})
+    add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
     add_requires("vshadersystem v0.9.0", {configs = { debug = is_mode("debug") }})
 end
 if is_plat("windows") then
-    add_requires("ktx-windows")
+    add_requires("ktx-windows", {configs = {shared = false}})
 else
-    add_requires("ktx", {configs = {decoder = true, vulkan = true}})
+    add_requires("ktx", {configs = {decoder = true, vulkan = true, shared = false}})
 end
 
 local runtime_headers = {
