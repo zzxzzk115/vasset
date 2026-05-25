@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vasset/asset_error.hpp"
+#include "vasset/vasset_type.hpp"
 
 #include <vfilesystem/interfaces/ifile.hpp>
 #include <vfilesystem/interfaces/ifilesystem.hpp>
@@ -59,6 +60,8 @@ namespace vasset
         vbase::UUID uuid;
         uint32_t    pathOffset = 0;
         uint32_t    pathSize   = 0;
+        VAssetType  type       = VAssetType::eUnknown;
+        uint32_t    reserved0  = 0;
     };
 
     struct VpkEntry
@@ -92,6 +95,7 @@ namespace vasset
     struct VpkWriteItem
     {
         vbase::UUID            uuid {};
+        VAssetType             type {VAssetType::eUnknown};
         std::string            logicalPath;
         std::vector<std::byte> bytes;
         bool                   allowCompress = true;

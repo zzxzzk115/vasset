@@ -118,6 +118,23 @@ namespace
                entry.type == VAssetType::eScriptLua;
     }
 
+    VAssetType inferRuntimeRawAssetType(const std::string& relPath)
+    {
+        std::filesystem::path p(relPath);
+        std::string           ext = p.extension().generic_string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
+        if (ext == ".vscn")
+            return VAssetType::eScene;
+        if (ext == ".vmanifest")
+            return VAssetType::eSceneManifest;
+        if (ext == ".lua")
+            return VAssetType::eScriptLua;
+        return VAssetType::eUnknown;
+    }
+
     bool validateTexturePayloadForPack(std::string_view              cookedPath,
                                        std::string_view              logicalPath,
                                        const std::vector<std::byte>& data)
@@ -278,6 +295,7 @@ namespace
         std::unordered_map<std::string, uint64_t>    indexPathToRawSize;
         std::unordered_map<std::string, std::string> registryPathToUuid;
         std::unordered_map<std::string, std::string> registryUuidToPath;
+        std::unordered_map<std::string, VAssetType>  registryPathToType;
 
         for (size_t i = 0; i < pkg.entries.size(); ++i)
         {
@@ -350,6 +368,7 @@ namespace
                 report.errors.push_back("Registry UUID maps to multiple paths: " + uuidStr);
                 continue;
             }
+            registryPathToType.emplace(logicalPath, registryEntry.type);
 
             if (!indexPathToRawSize.contains(logicalPath))
             {
@@ -379,6 +398,7 @@ namespace
             else
             {
                 std::unordered_map<std::string, std::string> tsvPathToUuid;
+                std::unordered_map<std::string, VAssetType>  tsvPathToType;
                 for (const auto& [uuidStr, entry] : registry.getRegistry())
                 {
                     const std::string expectedPath =
@@ -391,6 +411,7 @@ namespace
                     {
                         report.warnings.push_back("TSV path maps to multiple UUIDs: " + expectedPath);
                     }
+                    tsvPathToType.emplace(expectedPath, entry.type);
 
                     ++report.checkedTsvEntries;
                 }
@@ -407,6 +428,16 @@ namespace
                     {
                         report.errors.push_back("UUID mismatch for path '" + vpkPathKey + "': TSV=" + it->second +
                                                 ", VPK=" + vpkUuid);
+                    }
+                    if (auto typeIt = tsvPathToType.find(vpkPathKey); typeIt != tsvPathToType.end())
+                    {
+                        const auto vpkTypeIt = registryPathToType.find(vpkPathKey);
+                        if (vpkTypeIt != registryPathToType.end() && vpkTypeIt->second != typeIt->second)
+                        {
+                            report.errors.push_back("Type mismatch for path '" + vpkPathKey +
+                                                    "': TSV=" + toString(typeIt->second) +
+                                                    ", VPK=" + toString(vpkTypeIt->second));
+                        }
                     }
                 }
             }
@@ -598,6 +629,7 @@ static int cmd_pack(int argc, char** argv)
             it.logicalPath = logicalPath;
             if (!vbase::try_parse_uuid(uuidStr.c_str(), it.uuid))
                 it.uuid = vbase::uuid_from_string_key(logicalPath);
+            it.type          = entry.type;
             it.bytes         = std::move(data);
             it.allowCompress = true;
             packedLogicalPaths.insert(logicalPath);
@@ -641,6 +673,7 @@ static int cmd_pack(int argc, char** argv)
             VpkWriteItem it;
             it.logicalPath   = relPath;
             it.uuid          = vbase::uuid_from_string_key(relPath);
+            it.type          = inferRuntimeRawAssetType(relPath);
             it.bytes         = std::move(data);
             it.allowCompress = true;
 
@@ -713,6 +746,7 @@ static int cmd_pack(int argc, char** argv)
         VpkWriteItem it;
         it.logicalPath   = vi.value().source;
         it.uuid          = vi.value().uid; // Preserve UUID from VImport
+        it.type          = fromString(vi.value().importer);
         it.bytes         = std::move(data);
         it.allowCompress = true;
 
@@ -756,6 +790,7 @@ static int cmd_pack(int argc, char** argv)
         VpkWriteItem it;
         it.logicalPath   = relPath;
         it.uuid          = vbase::uuid_from_string_key(relPath);
+        it.type          = inferRuntimeRawAssetType(relPath);
         it.bytes         = std::move(data);
         it.allowCompress = true;
 

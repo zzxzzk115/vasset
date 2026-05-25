@@ -10,7 +10,7 @@
 
 namespace vasset
 {
-    static constexpr uint32_t VPK_VERSION = 2;
+    static constexpr uint32_t VPK_VERSION = 3;
 
     static inline uint64_t hash64(std::string_view s) { return XXH3_64bits(s.data(), s.size()); }
 
@@ -57,6 +57,13 @@ namespace vasset
         uint64_t dataOffset;
     };
 
+    struct VpkAssetRegistryEntryV2
+    {
+        vbase::UUID uuid;
+        uint32_t    pathOffset = 0;
+        uint32_t    pathSize   = 0;
+    };
+
     vbase::Result<VpkReadOnly, AssetError> openVpk(vbase::StringView vpkPath)
     {
         std::ifstream f(std::string(vpkPath), std::ios::binary);
@@ -100,7 +107,7 @@ namespace vasset
             out.header.registrySize   = 0;
             out.header.registryCount  = 0;
         }
-        else if (version == VPK_VERSION)
+        else if (version == 2 || version == VPK_VERSION)
         {
             f.read(reinterpret_cast<char*>(&out.header), sizeof(VpkHeader));
             if (!f)
@@ -129,11 +136,32 @@ namespace vasset
         // Read registry (v2+)
         if (out.header.registryCount > 0 && out.header.registrySize > 0)
         {
-            out.registry.resize(static_cast<size_t>(out.header.registryCount));
             f.seekg(static_cast<std::streamoff>(out.header.registryOffset), std::ios::beg);
-            f.read(reinterpret_cast<char*>(out.registry.data()), static_cast<std::streamsize>(out.header.registrySize));
-            if (!f)
-                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+            if (version == 2)
+            {
+                std::vector<VpkAssetRegistryEntryV2> registryV2;
+                registryV2.resize(static_cast<size_t>(out.header.registryCount));
+                f.read(reinterpret_cast<char*>(registryV2.data()), static_cast<std::streamsize>(out.header.registrySize));
+                if (!f)
+                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+                out.registry.reserve(registryV2.size());
+                for (const auto& r2 : registryV2)
+                {
+                    VpkAssetRegistryEntry r {};
+                    r.uuid       = r2.uuid;
+                    r.pathOffset = r2.pathOffset;
+                    r.pathSize   = r2.pathSize;
+                    out.registry.push_back(r);
+                }
+            }
+            else
+            {
+                out.registry.resize(static_cast<size_t>(out.header.registryCount));
+                f.read(reinterpret_cast<char*>(out.registry.data()), static_cast<std::streamsize>(out.header.registrySize));
+                if (!f)
+                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+            }
         }
 
         // Build buckets
@@ -256,6 +284,7 @@ namespace vasset
             r.uuid       = it.uuid;
             r.pathOffset = e.pathOffset;
             r.pathSize   = e.pathSize;
+            r.type       = it.type;
             registry.push_back(r);
 
             vbase::ConstByteSpan bytes {it.bytes.data(), it.bytes.size()};

@@ -266,12 +266,15 @@ namespace vasset
 
     void VAssetRegistry::cleanup()
     {
-        // Remove entries whose target file no longer exists.
+        // Remove entries whose source or imported payload no longer exists.
         for (auto it = m_Registry.begin(); it != m_Registry.end();)
         {
-            auto osPath = std::filesystem::path(m_AssetRootPath) / it->second.importedPath;
+            const auto sourcePath = std::filesystem::path(m_AssetRootPath) / it->second.sourcePath;
+            const auto importPath = std::filesystem::path(m_AssetRootPath) / it->second.importedPath;
 
-            if (!std::filesystem::exists(osPath))
+            const bool missingSource = !it->second.sourcePath.empty() && !std::filesystem::exists(sourcePath);
+            const bool missingImport = !it->second.importedPath.empty() && !std::filesystem::exists(importPath);
+            if (missingSource || missingImport)
                 it = m_Registry.erase(it);
             else
                 ++it;
