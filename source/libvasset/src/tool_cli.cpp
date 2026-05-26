@@ -114,8 +114,15 @@ namespace
 
     bool shouldPackSourcePayloadForEntry(const VAssetRegistry::AssetEntry& entry)
     {
-        return entry.type == VAssetType::eScene || entry.type == VAssetType::eSceneManifest ||
-               entry.type == VAssetType::eScriptLua;
+        std::filesystem::path p(entry.sourcePath);
+        std::string           ext = p.extension().generic_string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
+        return (entry.type == VAssetType::eScene && ext == ".vscn") ||
+               (entry.type == VAssetType::eSceneManifest && ext == ".vmanifest") ||
+               (entry.type == VAssetType::eScriptLua && ext == ".lua");
     }
 
     VAssetType inferRuntimeRawAssetType(const std::string& relPath)

@@ -18,6 +18,7 @@ namespace vasset
         eScriptLua,
         eScriptableObjectLua,
         eRenderGraphJson,
+        eMaterialGraphJson,
         eShaderLibraryManifest,
         eShaderLibrary,
     };
@@ -44,6 +45,8 @@ namespace vasset
                 return "scriptable_object_lua";
             case VAssetType::eRenderGraphJson:
                 return "render_graph_json";
+            case VAssetType::eMaterialGraphJson:
+                return "material_graph_json";
             case VAssetType::eShaderLibraryManifest:
                 return "shader_library_manifest";
             case VAssetType::eShaderLibrary:
@@ -91,6 +94,10 @@ namespace vasset
         else if (typeStr == "render_graph_json")
         {
             return VAssetType::eRenderGraphJson;
+        }
+        else if (typeStr == "material_graph_json")
+        {
+            return VAssetType::eMaterialGraphJson;
         }
         else if (typeStr == "shader_library_manifest")
         {

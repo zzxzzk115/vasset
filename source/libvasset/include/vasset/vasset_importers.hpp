@@ -69,6 +69,8 @@ namespace vasset
         importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
 
     private:
+        vbase::Result<vbase::UUID, AssetError>
+        importModelPrefab(vbase::StringView filePath, VMesh& outMesh, bool forceReimport);
         void processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
         void processMesh(const aiMesh*, const aiScene*, VMesh& outMesh) const;
         void processMaterial(const aiMaterial*, VMaterial& outMaterial) const;

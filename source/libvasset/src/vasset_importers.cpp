@@ -42,6 +42,7 @@
 #include <meshoptimizer.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -141,7 +142,7 @@ namespace
 
     bool isValidModel(vbase::StringView ext)
     {
-        return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".dae";
+        return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".dae";
     }
 
     bool isValidGaussianSplat(vbase::StringView ext)
@@ -172,10 +173,17 @@ namespace
         return hasSuffix(path.filename().generic_string(), ".vrg.json");
     }
 
+    bool isValidMaterialGraphJson(const std::filesystem::path& path)
+    {
+        return path.extension().generic_string() == ".vmatgraph" ||
+               hasSuffix(path.filename().generic_string(), ".vmatgraph.json");
+    }
+
     bool isValidSourceTextAsset(const std::filesystem::path& path)
     {
         const auto ext = path.extension().generic_string();
-        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path);
+        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path) ||
+               isValidMaterialGraphJson(path);
     }
 
     bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
@@ -354,6 +362,103 @@ namespace
     uint64_t meshImportParamsHash(const vasset::VMeshImporter::ImportOptions& options)
     {
         return hashU64(options.generateMeshlets ? 1u : 0u, hashString("mesh-params"));
+    }
+
+    std::string sanitizeAssetSegment(std::string value)
+    {
+        if (value.empty())
+            return "node";
+        for (char& c : value)
+        {
+            const auto ch = static_cast<unsigned char>(c);
+            if (!std::isalnum(ch) && c != '_' && c != '-')
+                c = '_';
+        }
+        while (!value.empty() && value.front() == '_')
+            value.erase(value.begin());
+        while (!value.empty() && value.back() == '_')
+            value.pop_back();
+        return value.empty() ? "node" : value;
+    }
+
+    std::string escapeSceneString(std::string_view value)
+    {
+        std::string out;
+        out.reserve(value.size());
+        for (const char c : value)
+        {
+            if (c == '"' || c == '\\')
+                out.push_back('\\');
+            out.push_back(c);
+        }
+        return out;
+    }
+
+    void finalizeMeshVertexFlags(vasset::VMesh& mesh)
+    {
+        mesh.vertexFlags = vasset::VVertexFlags::ePosition;
+        if (mesh.normals.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eNormal;
+        if (mesh.colors.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eColor;
+        if (mesh.texCoords0.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eTexCoord0;
+        if (mesh.texCoords1.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eTexCoord1;
+        if (mesh.tangents.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eTangent;
+    }
+
+    void writeSceneVec3(std::ostringstream& out, const char* component, const char* field, const aiVector3D& value)
+    {
+        out << component << "/" << field << " = (" << value.x << ", " << value.y << ", " << value.z << ")\n";
+    }
+
+    void writeSceneQuat(std::ostringstream& out, const char* component, const char* field, const aiQuaternion& value)
+    {
+        out << component << "/" << field << " = (" << value.x << ", " << value.y << ", " << value.z << ", "
+            << value.w << ")\n";
+    }
+
+    bool isAssimpGeneratedNodeName(std::string_view name)
+    {
+        return name.empty() || name.starts_with("nodes[") || name.starts_with("$AssimpFbx$");
+    }
+
+    std::string displayNameForNode(const aiNode* node, const aiScene* scene, const std::filesystem::path& sourcePath, int nodeId)
+    {
+        std::string nodeName = node ? node->mName.C_Str() : std::string {};
+        if (!isAssimpGeneratedNodeName(nodeName))
+            return nodeName;
+
+        if (node && node->mNumMeshes == 1 && node->mMeshes[0] < scene->mNumMeshes)
+        {
+            std::string meshName = scene->mMeshes[node->mMeshes[0]]->mName.C_Str();
+            if (!isAssimpGeneratedNodeName(meshName))
+                return meshName;
+        }
+
+        if (nodeId == 1)
+            return sourcePath.stem().generic_string();
+        if (node && node->mNumMeshes > 0)
+            return "Geometry";
+        return std::format("Node_{}", nodeId);
+    }
+
+    std::string displayNameForMesh(const aiMesh* mesh, const aiScene* scene, const std::filesystem::path& sourcePath, uint32_t meshOrdinal)
+    {
+        std::string meshName = mesh ? mesh->mName.C_Str() : std::string {};
+        if (!isAssimpGeneratedNodeName(meshName))
+            return meshName;
+
+        if (mesh && mesh->mMaterialIndex < scene->mNumMaterials)
+        {
+            std::string materialName = scene->mMaterials[mesh->mMaterialIndex]->GetName().C_Str();
+            if (!materialName.empty())
+                return materialName;
+        }
+
+        return std::format("{}_Mesh_{}", sourcePath.stem().generic_string(), meshOrdinal);
     }
 
     uint64_t gaussianSplatImportParamsHash(const vasset::VGaussianSplatImporter::ImportOptions& options)
@@ -777,6 +882,8 @@ namespace
             return vasset::VAssetType::eScriptableObjectLua;
         if (isValidRenderGraphJson(path))
             return vasset::VAssetType::eRenderGraphJson;
+        if (isValidMaterialGraphJson(path))
+            return vasset::VAssetType::eMaterialGraphJson;
         const auto ext = path.extension().generic_string();
         if (ext == ".vscn")
             return vasset::VAssetType::eScene;
@@ -1949,12 +2056,210 @@ namespace vasset
     }
 
     vbase::Result<vbase::UUID, AssetError>
+    VMeshImporter::importModelPrefab(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
+    {
+        std::filesystem::path osPath(filePath);
+        if (!std::filesystem::exists(osPath))
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string baseKey =
+            importedAssetKeyForCookedOutput(m_Registry, VAssetType::eSceneManifest, relativeSrcPath);
+        const std::string relativeManifestPath =
+            m_Registry.getImportedAssetPath(VAssetType::eSceneManifest, baseKey, true);
+        const auto manifestUUID = vbase::uuid_from_string_key(relativeManifestPath);
+
+        const uint64_t sourceHash = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        const uint64_t paramsHash = meshImportParamsHash(m_Options);
+        constexpr auto importerVersion = "model_prefab:1";
+        constexpr auto outputSchema = "vmanifest:1+vmesh:3";
+
+        auto entry = m_Registry.lookup(manifestUUID);
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeManifestPath}))
+        {
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              manifestUUID,
+                                              toString(VAssetType::eSceneManifest),
+                                              relativeSrcPath,
+                                              relativeManifestPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeManifestPath}) ||
+                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 manifestUUID,
+                                                 toString(VAssetType::eSceneManifest),
+                                                 relativeSrcPath,
+                                                 relativeManifestPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                std::cout << "Model prefab already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(manifestUUID);
+            }
+        }
+
+        m_FilePath = filePath;
+
+        const unsigned int flags = aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace |
+                                   aiProcess_GenSmoothNormals | aiProcess_GenUVCoords;
+
+        Assimp::Importer importer {};
+        const aiScene* scene = importer.ReadFile(filePath.data(), flags);
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        std::ostringstream manifest;
+        manifest << "[vmanifest]\n";
+        manifest << "version = 1\n";
+        manifest << "root = 1\n\n";
+
+        const auto rootUUID = vbase::uuid_from_string_key(relativeManifestPath + "#root");
+        manifest << "[node id=1 name=\"" << escapeSceneString(osPath.stem().generic_string())
+                 << "\" parent=0 uuid=\"" << vbase::to_string(rootUUID) << "\"]\n";
+        manifest << "TransformComponent/position = (0, 0, 0)\n";
+        manifest << "TransformComponent/rotation = (0, 0, 0, 1)\n";
+        manifest << "TransformComponent/scale = (1, 1, 1)\n\n";
+
+        int nextNodeId = 2;
+        uint32_t nextMeshOrdinal = 0;
+        bool assignedOutMesh = false;
+
+        std::function<void(const aiNode*, aiMatrix4x4, std::string)> emitNodeMeshes;
+        emitNodeMeshes = [&](const aiNode* node, const aiMatrix4x4 parentTransform, const std::string nodePath) {
+            if (!node)
+                return;
+
+            const aiMatrix4x4 nodeTransform = parentTransform * node->mTransformation;
+            for (unsigned int i = 0; i < node->mNumMeshes; ++i)
+            {
+                const uint32_t meshOrdinal = nextMeshOrdinal++;
+                const auto* aiMesh = scene->mMeshes[node->mMeshes[i]];
+                const int nodeId = nextNodeId++;
+                const std::string nodeName = displayNameForMesh(aiMesh, scene, osPath, meshOrdinal);
+                const std::string meshPathKey = nodePath + "_" + std::to_string(i) + "_" + sanitizeAssetSegment(nodeName);
+                const std::string stableNodeKey = relativeManifestPath + "#mesh_node/" + meshPathKey;
+                const auto nodeUUID = vbase::uuid_from_string_key(stableNodeKey);
+
+                VMesh nodeMesh {};
+                const std::string meshKey = baseKey + "_" + sanitizeAssetSegment(meshPathKey);
+                const std::string relativeMeshPath = m_Registry.getImportedAssetPath(VAssetType::eMesh, meshKey, true);
+                nodeMesh.uuid = vbase::uuid_from_string_key(relativeMeshPath);
+                nodeMesh.name = nodeName;
+                nodeMesh.sourceFileName = osPath.filename().generic_string();
+
+                processMesh(aiMesh, scene, nodeMesh);
+
+                if (m_Options.generateMeshlets)
+                    generateMeshlets(nodeMesh);
+                finalizeMeshVertexFlags(nodeMesh);
+
+                const auto meshDiskPath = (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeMeshPath)
+                                              .generic_string();
+                auto sr = saveMesh(nodeMesh, meshDiskPath, 3);
+                if (!sr)
+                    throw sr.error();
+
+                auto rr = m_Registry.registerAsset(nodeMesh.uuid, relativeMeshPath, relativeMeshPath, VAssetType::eMesh);
+                if (!rr)
+                    throw rr.error();
+
+                if (!assignedOutMesh)
+                {
+                    outMesh = nodeMesh;
+                    assignedOutMesh = true;
+                }
+
+                manifest << "[node id=" << nodeId << " name=\"" << escapeSceneString(nodeName)
+                         << "\" parent=1 uuid=\"" << vbase::to_string(nodeUUID) << "\"]\n";
+                aiVector3D scaling(1.0f, 1.0f, 1.0f);
+                aiQuaternion rotation;
+                aiVector3D position(0.0f, 0.0f, 0.0f);
+                nodeTransform.Decompose(scaling, rotation, position);
+                writeSceneVec3(manifest, "TransformComponent", "position", position);
+                writeSceneQuat(manifest, "TransformComponent", "rotation", rotation);
+                writeSceneVec3(manifest, "TransformComponent", "scale", scaling);
+                manifest << "MeshComponent/mesh = \"res://" << escapeSceneString(relativeMeshPath) << "\"\n";
+                manifest << "MeshComponent/builtinGeometry = 4294967295\n";
+                manifest << "MeshComponent/materialColor = (1, 1, 1, 1)\n\n";
+            }
+
+            for (unsigned int i = 0; i < node->mNumChildren; ++i)
+            {
+                const std::string childPath = nodePath + "_" + std::to_string(i) + "_" +
+                                              sanitizeAssetSegment(node->mChildren[i]->mName.C_Str());
+                emitNodeMeshes(node->mChildren[i], nodeTransform, childPath);
+            }
+        };
+
+        try
+        {
+            emitNodeMeshes(scene->mRootNode, aiMatrix4x4(), "0_" + sanitizeAssetSegment(scene->mRootNode->mName.C_Str()));
+        }
+        catch (AssetError error)
+        {
+            return vbase::Result<vbase::UUID, AssetError>::err(error);
+        }
+
+        const auto manifestDiskPath =
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeManifestPath).generic_string();
+        std::filesystem::create_directories(std::filesystem::path(manifestDiskPath).parent_path());
+        {
+            std::ofstream file(manifestDiskPath, std::ios::binary);
+            if (!file)
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eIOError);
+            const auto text = manifest.str();
+            file.write(text.data(), static_cast<std::streamsize>(text.size()));
+        }
+
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eSceneManifest);
+        vimport.uid = manifestUUID;
+        vimport.source = relativeSrcPath;
+        vimport.output = relativeManifestPath;
+        auto importSidecarPath = osPath;
+        auto srImport = saveVImport(vimport, importSidecarPath.replace_extension(".vimport").generic_string());
+        if (!srImport)
+            return vbase::Result<vbase::UUID, AssetError>::err(srImport.error());
+
+        auto rr = m_Registry.registerAsset(manifestUUID, relativeSrcPath, relativeManifestPath, VAssetType::eSceneManifest);
+        if (!rr)
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             manifestUUID,
+                                             toString(VAssetType::eSceneManifest),
+                                             relativeSrcPath,
+                                             relativeManifestPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
+
+        return vbase::Result<vbase::UUID, AssetError>::ok(manifestUUID);
+    }
+
+    vbase::Result<vbase::UUID, AssetError>
     VMeshImporter::importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
     {
         // Check path
         std::filesystem::path osPath(filePath);
         if (!std::filesystem::exists(osPath))
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        if (isValidModel(osPath.extension().generic_string()))
+            return importModelPrefab(filePath, outMesh, forceReimport);
 
         // Check registry
         const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
@@ -2031,18 +2336,7 @@ namespace vasset
             generateMeshlets(outMesh);
         }
 
-        // Set vertex flags
-        outMesh.vertexFlags |= VVertexFlags::ePosition;
-        if (outMesh.normals.size() == outMesh.vertexCount)
-            outMesh.vertexFlags |= VVertexFlags::eNormal;
-        if (outMesh.colors.size() == outMesh.vertexCount)
-            outMesh.vertexFlags |= VVertexFlags::eColor;
-        if (outMesh.texCoords0.size() == outMesh.vertexCount)
-            outMesh.vertexFlags |= VVertexFlags::eTexCoord0;
-        if (outMesh.texCoords1.size() == outMesh.vertexCount)
-            outMesh.vertexFlags |= VVertexFlags::eTexCoord1;
-        if (outMesh.tangents.size() == outMesh.vertexCount)
-            outMesh.vertexFlags |= VVertexFlags::eTangent;
+        finalizeMeshVertexFlags(outMesh);
         // Note: Joint indices and weights would require additional processing, e.g., from bones
 
         const std::string importedPath =
@@ -2113,7 +2407,7 @@ namespace vasset
         subMesh.vertexCount   = mesh->mNumVertices;
         subMesh.indexOffset   = static_cast<uint32_t>(outMesh.indices.size());
         subMesh.indexCount    = mesh->mNumFaces * 3; // Assuming triangulated
-        subMesh.materialIndex = mesh->mMaterialIndex;
+        subMesh.materialIndex = static_cast<uint32_t>(outMesh.materials.size());
         subMesh.name          = mesh->mName.C_Str();
 
         // Process vertices
@@ -2208,6 +2502,14 @@ namespace vasset
 
             VMaterial vMat {};
             processMaterial(aiMat, vMat);
+            if (vMat.name.empty())
+                vMat.name = materialName;
+            outMesh.materials.push_back(vMat);
+        }
+        else
+        {
+            VMaterial vMat {};
+            vMat.name = std::format("{}_default", outMesh.sourceFileName);
             outMesh.materials.push_back(vMat);
         }
 
