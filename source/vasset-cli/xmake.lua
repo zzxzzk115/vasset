@@ -8,6 +8,11 @@ target("vasset-cli")
 
     -- add deps
     add_deps("vasset-import")
+    if os.isdir(path.join(os.projectdir(), "builtin/generated/include")) then
+        add_deps("vultra_builtin_assets")
+        add_includedirs(path.join(os.projectdir(), "builtin/generated/include"))
+        add_defines("VASSET_CLI_HAS_VULTRA_BUILTIN_SHADERS")
+    end
 
     -- add defines
     if is_mode("debug") then

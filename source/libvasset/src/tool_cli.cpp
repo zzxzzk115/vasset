@@ -303,6 +303,7 @@ namespace
         std::unordered_map<std::string, std::string> registryPathToUuid;
         std::unordered_map<std::string, std::string> registryUuidToPath;
         std::unordered_map<std::string, VAssetType>  registryPathToType;
+        std::unordered_map<std::string, std::string> registryPathToDataPath;
 
         for (size_t i = 0; i < pkg.entries.size(); ++i)
         {
@@ -419,6 +420,9 @@ namespace
                         report.warnings.push_back("TSV path maps to multiple UUIDs: " + expectedPath);
                     }
                     tsvPathToType.emplace(expectedPath, entry.type);
+                    registryPathToDataPath.emplace(
+                        expectedPath,
+                        normalizePackFilterPath(packDataPathForEntry(entry, assetRootOpt)));
 
                     ++report.checkedTsvEntries;
                 }
@@ -458,7 +462,11 @@ namespace
         {
             for (const auto& [logicalPath, _] : indexPathToRawSize)
             {
-                const auto expectedPath = assetRootOpt / std::filesystem::path(logicalPath);
+                auto       dataPathIt = registryPathToDataPath.find(logicalPath);
+                const auto expectedPath =
+                    assetRootOpt / std::filesystem::path(dataPathIt != registryPathToDataPath.end()
+                                                             ? dataPathIt->second
+                                                             : logicalPath);
                 if (!fileExists(expectedPath))
                 {
                     report.errors.push_back("Missing source file for VPK path: " + logicalPath + " -> " +

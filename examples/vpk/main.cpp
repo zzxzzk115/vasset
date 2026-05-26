@@ -7,6 +7,11 @@ using namespace vasset;
 
 int main()
 {
+    constexpr const char* MODEL_PATH = "res://models/DamagedHelmet/DamagedHelmet.gltf";
+    constexpr const char* MESH_PATH =
+        "res://models/DamagedHelmet/DamagedHelmet.gltf#mesh/0_node_damagedHelmet_-6514_mesh_0_mesh_helmet_LP_13930damagedHelmet";
+    constexpr const char* TEXTURE_PATH = "res://textures/environment_maps/citrus_orchard_puresky_1k.hdr";
+
     auto vpkFS = std::make_shared<VpkFileSystem>("out.vpk");
     vpkFS->openPackage();
 
@@ -17,19 +22,28 @@ int main()
     vfilesystem::VirtualFileSystem vfs {};
     vfs.mount(vpkFS, "res");
 
-    bool exists = vfs.exists("res://models/DamagedHelmet/DamagedHelmet.gltf");
-    std::cout << "res://models/DamagedHelmet/DamagedHelmet.gltf Exist? " << exists << std::endl;
+    bool exists = vfs.exists(MODEL_PATH);
+    std::cout << MODEL_PATH << " Exist? " << exists << std::endl;
 
     if (!exists)
     {
-        std::cerr << "File not found in VPK: res://models/DamagedHelmet/DamagedHelmet.gltf" << std::endl;
+        std::cerr << "File not found in VPK: " << MODEL_PATH << std::endl;
         return 1;
     }
 
-    auto r = vfs.open("res://models/DamagedHelmet/DamagedHelmet.gltf", vfilesystem::FileMode::eRead);
+    exists = vfs.exists(MESH_PATH);
+    std::cout << MESH_PATH << " Exist? " << exists << std::endl;
+
+    if (!exists)
+    {
+        std::cerr << "File not found in VPK: " << MESH_PATH << std::endl;
+        return 1;
+    }
+
+    auto r = vfs.open(MESH_PATH, vfilesystem::FileMode::eRead);
     if (!r)
     {
-        std::cerr << "Failed to open file in VPK: res://models/DamagedHelmet/DamagedHelmet.gltf" << std::endl;
+        std::cerr << "Failed to open file in VPK: " << MESH_PATH << std::endl;
         return 1;
     }
 
@@ -44,7 +58,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Loaded mesh (res://models/DamagedHelmet/DamagedHelmet.gltf) from VPK: " << mesh.name << " with "
+    std::cout << "Loaded mesh (" << MESH_PATH << ") from VPK: " << mesh.name << " with "
               << mesh.vertexCount << " vertices. Material count: " << mesh.materials.size() << std::endl;
 
     for (const auto& material : mesh.materials)
@@ -89,20 +103,20 @@ int main()
         }
     }
 
-    exists = vfs.exists("res://textures/awesomeface.png");
+    exists = vfs.exists(TEXTURE_PATH);
 
     if (!exists)
     {
-        std::cerr << "File not found in VPK: res://textures/awesomeface.png" << std::endl;
+        std::cerr << "File not found in VPK: " << TEXTURE_PATH << std::endl;
         return 1;
     }
 
-    std::cout << "res://textures/awesomeface.png Exist? " << exists << std::endl;
+    std::cout << TEXTURE_PATH << " Exist? " << exists << std::endl;
 
-    r = vfs.open("res://textures/awesomeface.png", vfilesystem::FileMode::eRead);
+    r = vfs.open(TEXTURE_PATH, vfilesystem::FileMode::eRead);
     if (!r)
     {
-        std::cerr << "Failed to open texture file in VPK: res://textures/awesomeface.png" << std::endl;
+        std::cerr << "Failed to open texture file in VPK: " << TEXTURE_PATH << std::endl;
         return 1;
     }
 
@@ -117,7 +131,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Loaded texture (res://textures/awesomeface.png) from VPK: " << " (" << texture.width << "x"
+    std::cout << "Loaded texture (" << TEXTURE_PATH << ") from VPK: " << " (" << texture.width << "x"
               << texture.height << ")" << std::endl;
 
     return 0;
