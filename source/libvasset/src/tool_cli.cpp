@@ -476,7 +476,7 @@ namespace
     }
 } // namespace
 
-static int cmd_import(int argc, char** argv)
+static int cmd_import(int argc, char** argv, const VAssetImporter::ImportOptions& baseOptions = {})
 {
     if (argc < 2)
     {
@@ -526,7 +526,9 @@ static int cmd_import(int argc, char** argv)
 
     // Setup importer
     VAssetImporter assetImporter(registry);
-    assetImporter.setOptions({.ignoredDirectories = ignoredDirectories});
+    auto importOptions = baseOptions;
+    importOptions.ignoredDirectories = std::move(ignoredDirectories);
+    assetImporter.setOptions(importOptions);
 
     // Import all assets
     auto ir = assetImporter.importOrReimportAssetFolder(assetRootPath, reimport);
@@ -922,6 +924,11 @@ namespace vasset::tool
 
 int run_vasset_cli(int argc, char** argv)
 {
+    return run_vasset_cli(argc, argv, {});
+}
+
+int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& importOptions)
+{
     try
     {
         if (argc < 2)
@@ -938,14 +945,14 @@ int run_vasset_cli(int argc, char** argv)
 
         std::string cmd = argv[1];
         if (cmd == "import")
-            return cmd_import(argc - 1, argv + 1);
+            return cmd_import(argc - 1, argv + 1, importOptions);
         if (cmd == "pack")
             return cmd_pack(argc - 1, argv + 1);
         if (cmd == "validate-vpk")
             return cmd_validate_vpk(argc - 1, argv + 1);
 
         // Backward compatible: treat as legacy import usage (no explicit command)
-        return cmd_import(argc, argv);
+        return cmd_import(argc, argv, importOptions);
     }
     catch (const std::exception& e)
     {
