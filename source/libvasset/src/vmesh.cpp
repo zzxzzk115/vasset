@@ -282,6 +282,15 @@ namespace vasset
         writeRaw(&nameLength, sizeof(nameLength));
         writeRaw(mesh.name.c_str(), nameLength);
 
+        // Optional payload metadata. Kept at the tail so older readers can ignore it.
+        const char metaMagic[16] = "VMESH_META1\0";
+        writeRaw(metaMagic, sizeof(metaMagic));
+        uint32_t metaFlags = mesh.hasDefaultTransform ? 1u : 0u;
+        writeRaw(&metaFlags, sizeof(metaFlags));
+        writeRaw(&mesh.defaultPosition, sizeof(mesh.defaultPosition));
+        writeRaw(&mesh.defaultRotation, sizeof(mesh.defaultRotation));
+        writeRaw(&mesh.defaultScale, sizeof(mesh.defaultScale));
+
         // ------------------------------------------------------------
         // Write file
         // ------------------------------------------------------------
@@ -678,6 +687,36 @@ namespace vasset
 
         outMesh.name.resize(nameLength);
         readRaw(outMesh.name.data(), nameLength);
+
+        outMesh.hasDefaultTransform = false;
+        outMesh.defaultPosition     = glm::vec3 {0.0f};
+        outMesh.defaultRotation     = glm::quat {1.0f, 0.0f, 0.0f, 0.0f};
+        outMesh.defaultScale        = glm::vec3 {1.0f};
+
+        if (rawOffset + 16 + sizeof(uint32_t) <= raw.size())
+        {
+            char metaMagic[16] {};
+            const size_t metaOffset = rawOffset;
+            if (readRaw(metaMagic, sizeof(metaMagic)) && std::string(metaMagic) == "VMESH_META1")
+            {
+                uint32_t metaFlags = 0;
+                if (readRaw(&metaFlags, sizeof(metaFlags)))
+                {
+                    outMesh.hasDefaultTransform = (metaFlags & 1u) != 0;
+                    readRaw(&outMesh.defaultPosition, sizeof(outMesh.defaultPosition));
+                    readRaw(&outMesh.defaultRotation, sizeof(outMesh.defaultRotation));
+                    readRaw(&outMesh.defaultScale, sizeof(outMesh.defaultScale));
+                    if (glm::dot(outMesh.defaultRotation, outMesh.defaultRotation) > 1e-12f)
+                        outMesh.defaultRotation = glm::normalize(outMesh.defaultRotation);
+                    else
+                        outMesh.defaultRotation = glm::quat {1.0f, 0.0f, 0.0f, 0.0f};
+                }
+            }
+            else
+            {
+                rawOffset = metaOffset;
+            }
+        }
 
         return vbase::Result<void, AssetError>::ok();
     }

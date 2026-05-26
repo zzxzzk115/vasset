@@ -4,6 +4,7 @@
 #include "vasset/vvertex.hpp"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -78,6 +79,11 @@ namespace vasset
         std::vector<VMaterial> materials;
 
         std::string name;
+
+        bool      hasDefaultTransform {false};
+        glm::vec3 defaultPosition {0.0f};
+        glm::quat defaultRotation {1.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec3 defaultScale {1.0f};
 
         std::string sourceFileName; // Not serialized
     };

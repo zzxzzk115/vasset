@@ -269,10 +269,14 @@ namespace vasset
         // Remove entries whose source or imported payload no longer exists.
         for (auto it = m_Registry.begin(); it != m_Registry.end();)
         {
-            const auto sourcePath = std::filesystem::path(m_AssetRootPath) / it->second.sourcePath;
+            std::string physicalSourcePath = it->second.sourcePath;
+            if (const auto fragment = physicalSourcePath.find('#'); fragment != std::string::npos)
+                physicalSourcePath.resize(fragment);
+
+            const auto sourcePath = std::filesystem::path(m_AssetRootPath) / physicalSourcePath;
             const auto importPath = std::filesystem::path(m_AssetRootPath) / it->second.importedPath;
 
-            const bool missingSource = !it->second.sourcePath.empty() && !std::filesystem::exists(sourcePath);
+            const bool missingSource = !physicalSourcePath.empty() && !std::filesystem::exists(sourcePath);
             const bool missingImport = !it->second.importedPath.empty() && !std::filesystem::exists(importPath);
             if (missingSource || missingImport)
                 it = m_Registry.erase(it);

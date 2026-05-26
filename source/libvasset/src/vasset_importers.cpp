@@ -60,6 +60,7 @@
 #include <cstdlib>
 #include <unordered_map>
 #include <variant>
+#include <vector>
 
 namespace
 {
@@ -2093,8 +2094,8 @@ namespace vasset
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "model_prefab:1";
-        constexpr auto outputSchema = "vmanifest:1+vmesh:3";
+        constexpr auto importerVersion = "model_prefab:5";
+        constexpr auto outputSchema = "vmanifest:1+vmesh:3+default_transform:1";
 
         auto entry = m_Registry.lookup(manifestUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -2138,6 +2139,24 @@ namespace vasset
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
 
+        {
+            const std::string cookedMeshPrefix =
+                m_Registry.getImportedAssetPath(VAssetType::eMesh, baseKey + "_", true);
+            std::vector<vbase::UUID> staleMeshEntries;
+            for (const auto& [uuidStr, registryEntry] : m_Registry.getRegistry())
+            {
+                if (registryEntry.type != VAssetType::eMesh || !registryEntry.importedPath.starts_with(cookedMeshPrefix))
+                    continue;
+
+                vbase::UUID uuid {};
+                if (vbase::try_parse_uuid(uuidStr.c_str(), uuid))
+                    staleMeshEntries.push_back(uuid);
+            }
+
+            for (const auto& uuid : staleMeshEntries)
+                (void)m_Registry.unregisterAsset(uuid);
+        }
+
         std::ostringstream manifest;
         manifest << "[vmanifest]\n";
         manifest << "version = 1\n";
@@ -2154,61 +2173,127 @@ namespace vasset
         uint32_t nextMeshOrdinal = 0;
         bool assignedOutMesh = false;
 
-        std::function<void(const aiNode*, aiMatrix4x4, std::string)> emitNodeMeshes;
-        emitNodeMeshes = [&](const aiNode* node, const aiMatrix4x4 parentTransform, const std::string nodePath) {
+        const auto isIdentityTransform = [](const aiMatrix4x4& m) {
+            constexpr float eps = 1e-5f;
+            const aiMatrix4x4 identity;
+            return std::abs(m.a1 - identity.a1) < eps && std::abs(m.a2 - identity.a2) < eps &&
+                   std::abs(m.a3 - identity.a3) < eps && std::abs(m.a4 - identity.a4) < eps &&
+                   std::abs(m.b1 - identity.b1) < eps && std::abs(m.b2 - identity.b2) < eps &&
+                   std::abs(m.b3 - identity.b3) < eps && std::abs(m.b4 - identity.b4) < eps &&
+                   std::abs(m.c1 - identity.c1) < eps && std::abs(m.c2 - identity.c2) < eps &&
+                   std::abs(m.c3 - identity.c3) < eps && std::abs(m.c4 - identity.c4) < eps &&
+                   std::abs(m.d1 - identity.d1) < eps && std::abs(m.d2 - identity.d2) < eps &&
+                   std::abs(m.d3 - identity.d3) < eps && std::abs(m.d4 - identity.d4) < eps;
+        };
+
+        const auto decomposeDefaultTransform = [](const aiMatrix4x4& transform, VMesh& mesh) {
+            aiVector3D scaling(1.0f, 1.0f, 1.0f);
+            aiQuaternion rotation;
+            aiVector3D position(0.0f, 0.0f, 0.0f);
+            transform.Decompose(scaling, rotation, position);
+            mesh.hasDefaultTransform = true;
+            mesh.defaultPosition = glm::vec3 {position.x, position.y, position.z};
+            mesh.defaultRotation = glm::quat {rotation.w, rotation.x, rotation.y, rotation.z};
+            mesh.defaultScale = glm::vec3 {scaling.x, scaling.y, scaling.z};
+        };
+
+        const auto recenterMeshAroundBoundsCenter = [](VMesh& mesh) {
+            if (mesh.positions.empty())
+                return glm::vec3 {0.0f};
+
+            glm::vec3 minP(std::numeric_limits<float>::infinity());
+            glm::vec3 maxP(-std::numeric_limits<float>::infinity());
+            for (const auto& position : mesh.positions)
+            {
+                minP = glm::min(minP, position);
+                maxP = glm::max(maxP, position);
+            }
+
+            const glm::vec3 center = (minP + maxP) * 0.5f;
+            if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z))
+                return glm::vec3 {0.0f};
+
+            for (auto& position : mesh.positions)
+                position -= center;
+
+            return center;
+        };
+
+        const auto transformWithLocalPivot = [](aiMatrix4x4 transform, const glm::vec3& pivot) {
+            aiMatrix4x4 pivotTransform;
+            aiMatrix4x4::Translation(aiVector3D(pivot.x, pivot.y, pivot.z), pivotTransform);
+            return transform * pivotTransform;
+        };
+
+        struct ImportedNodeMeshPaths
+        {
+            std::string sourcePath;
+            std::string importedPath;
+        };
+
+        const auto importNodeMesh = [&](const aiMesh* aiMesh,
+                                        const std::string& meshPathKey,
+                                        const std::string& nodeName,
+                                        const aiMatrix4x4& defaultTransform) -> ImportedNodeMeshPaths {
+            VMesh nodeMesh {};
+            const std::string meshKey = baseKey + "_" + sanitizeAssetSegment(meshPathKey);
+            const std::string relativeMeshPath = m_Registry.getImportedAssetPath(VAssetType::eMesh, meshKey, true);
+            const std::string relativeMeshSourcePath =
+                relativeSrcPath + "#mesh/" + sanitizeAssetSegment(meshPathKey);
+            nodeMesh.uuid = vbase::uuid_from_string_key(relativeMeshPath);
+            nodeMesh.name = nodeName;
+            nodeMesh.sourceFileName = osPath.filename().generic_string();
+
+            processMesh(aiMesh, scene, nodeMesh);
+            const glm::vec3 localPivot = recenterMeshAroundBoundsCenter(nodeMesh);
+            decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
+
+            if (m_Options.generateMeshlets)
+                generateMeshlets(nodeMesh);
+            finalizeMeshVertexFlags(nodeMesh);
+
+            const auto meshDiskPath =
+                (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeMeshPath).generic_string();
+            auto sr = saveMesh(nodeMesh, meshDiskPath, 3);
+            if (!sr)
+                throw sr.error();
+
+            auto rr = m_Registry.registerAsset(nodeMesh.uuid, relativeMeshSourcePath, relativeMeshPath, VAssetType::eMesh);
+            if (!rr)
+                throw rr.error();
+
+            if (!assignedOutMesh)
+            {
+                outMesh = nodeMesh;
+                assignedOutMesh = true;
+            }
+
+            return ImportedNodeMeshPaths {
+                .sourcePath   = relativeMeshSourcePath,
+                .importedPath = relativeMeshPath,
+            };
+        };
+
+        std::function<void(const aiNode*, std::string, aiMatrix4x4)> emitNodeMeshes;
+        emitNodeMeshes = [&](const aiNode* node, const std::string nodePath, const aiMatrix4x4 parentTransform) {
             if (!node)
                 return;
 
-            const aiMatrix4x4 nodeTransform = parentTransform * node->mTransformation;
+            const aiMatrix4x4 nodeWorldTransform = parentTransform * node->mTransformation;
+
             for (unsigned int i = 0; i < node->mNumMeshes; ++i)
             {
                 const uint32_t meshOrdinal = nextMeshOrdinal++;
                 const auto* aiMesh = scene->mMeshes[node->mMeshes[i]];
-                const int nodeId = nextNodeId++;
-                const std::string nodeName = displayNameForMesh(aiMesh, scene, osPath, meshOrdinal);
-                const std::string meshPathKey = nodePath + "_" + std::to_string(i) + "_" + sanitizeAssetSegment(nodeName);
-                const std::string stableNodeKey = relativeManifestPath + "#mesh_node/" + meshPathKey;
-                const auto nodeUUID = vbase::uuid_from_string_key(stableNodeKey);
+                const int meshNodeId = nextNodeId++;
+                const std::string meshName = displayNameForMesh(aiMesh, scene, osPath, meshOrdinal);
+                const std::string meshPathKey = nodePath + "_mesh_" + std::to_string(i) + "_" + sanitizeAssetSegment(meshName);
+                const auto meshNodeUUID = vbase::uuid_from_string_key(relativeManifestPath + "#mesh_node/" + meshPathKey);
+                const ImportedNodeMeshPaths meshPaths = importNodeMesh(aiMesh, meshPathKey, meshName, nodeWorldTransform);
 
-                VMesh nodeMesh {};
-                const std::string meshKey = baseKey + "_" + sanitizeAssetSegment(meshPathKey);
-                const std::string relativeMeshPath = m_Registry.getImportedAssetPath(VAssetType::eMesh, meshKey, true);
-                nodeMesh.uuid = vbase::uuid_from_string_key(relativeMeshPath);
-                nodeMesh.name = nodeName;
-                nodeMesh.sourceFileName = osPath.filename().generic_string();
-
-                processMesh(aiMesh, scene, nodeMesh);
-
-                if (m_Options.generateMeshlets)
-                    generateMeshlets(nodeMesh);
-                finalizeMeshVertexFlags(nodeMesh);
-
-                const auto meshDiskPath = (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeMeshPath)
-                                              .generic_string();
-                auto sr = saveMesh(nodeMesh, meshDiskPath, 3);
-                if (!sr)
-                    throw sr.error();
-
-                auto rr = m_Registry.registerAsset(nodeMesh.uuid, relativeMeshPath, relativeMeshPath, VAssetType::eMesh);
-                if (!rr)
-                    throw rr.error();
-
-                if (!assignedOutMesh)
-                {
-                    outMesh = nodeMesh;
-                    assignedOutMesh = true;
-                }
-
-                manifest << "[node id=" << nodeId << " name=\"" << escapeSceneString(nodeName)
-                         << "\" parent=1 uuid=\"" << vbase::to_string(nodeUUID) << "\"]\n";
-                aiVector3D scaling(1.0f, 1.0f, 1.0f);
-                aiQuaternion rotation;
-                aiVector3D position(0.0f, 0.0f, 0.0f);
-                nodeTransform.Decompose(scaling, rotation, position);
-                writeSceneVec3(manifest, "TransformComponent", "position", position);
-                writeSceneQuat(manifest, "TransformComponent", "rotation", rotation);
-                writeSceneVec3(manifest, "TransformComponent", "scale", scaling);
-                manifest << "MeshComponent/mesh = \"res://" << escapeSceneString(relativeMeshPath) << "\"\n";
+                manifest << "[node id=" << meshNodeId << " name=\"" << escapeSceneString(meshName)
+                         << "\" parent=1 uuid=\"" << vbase::to_string(meshNodeUUID) << "\"]\n";
+                manifest << "MeshComponent/mesh = \"res://" << escapeSceneString(meshPaths.sourcePath) << "\"\n";
                 manifest << "MeshComponent/builtinGeometry = 4294967295\n";
                 manifest << "MeshComponent/materialColor = (1, 1, 1, 1)\n\n";
             }
@@ -2217,13 +2302,26 @@ namespace vasset
             {
                 const std::string childPath = nodePath + "_" + std::to_string(i) + "_" +
                                               sanitizeAssetSegment(node->mChildren[i]->mName.C_Str());
-                emitNodeMeshes(node->mChildren[i], nodeTransform, childPath);
+                emitNodeMeshes(node->mChildren[i], childPath, nodeWorldTransform);
             }
         };
 
         try
         {
-            emitNodeMeshes(scene->mRootNode, aiMatrix4x4(), "0_" + sanitizeAssetSegment(scene->mRootNode->mName.C_Str()));
+            const std::string rootPath = "0_" + sanitizeAssetSegment(scene->mRootNode->mName.C_Str());
+            if (scene->mRootNode->mNumMeshes == 0 && isIdentityTransform(scene->mRootNode->mTransformation))
+            {
+                for (unsigned int i = 0; i < scene->mRootNode->mNumChildren; ++i)
+                {
+                    const std::string childPath = rootPath + "_" + std::to_string(i) + "_" +
+                                                  sanitizeAssetSegment(scene->mRootNode->mChildren[i]->mName.C_Str());
+                    emitNodeMeshes(scene->mRootNode->mChildren[i], childPath, aiMatrix4x4 {});
+                }
+            }
+            else
+            {
+                emitNodeMeshes(scene->mRootNode, rootPath, aiMatrix4x4 {});
+            }
         }
         catch (AssetError error)
         {
@@ -2293,7 +2391,7 @@ namespace vasset
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash     = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "mesh:1";
+        constexpr auto importerVersion = "mesh:2";
         constexpr auto outputSchema = "vmesh:3";
 
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -2688,6 +2786,15 @@ namespace vasset
         // ------------------------------------------------------------
         auto props = parseMaterialProperties(material);
 
+        auto hasProp = [&](const char* key, unsigned semantic, unsigned index) {
+            return props.find(MatPropKey {key, semantic, index}) != props.end();
+        };
+        const bool hasMetallicRoughnessHints =
+            hasProp(AI_MATKEY_BASE_COLOR) || hasProp(AI_MATKEY_METALLIC_FACTOR) ||
+            hasProp(AI_MATKEY_ROUGHNESS_FACTOR) || material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0 ||
+            material->GetTextureCount(aiTextureType_METALNESS) > 0 ||
+            material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0;
+
         // Name
         aiString name;
         if (tryGet(props, AI_MATKEY_NAME, name))
@@ -2733,6 +2840,34 @@ namespace vasset
 
             outMaterial.core.pbrSG.diffuseTexture            = loadTexture(material, aiTextureType_DIFFUSE);
             outMaterial.core.pbrSG.specularGlossinessTexture = loadTexture(material, aiTextureType_SPECULAR);
+        }
+        else if (!hasMetallicRoughnessHints)
+        {
+            outMaterial.model      = VMaterialModel::ePhong;
+            outMaterial.core.phong = {};
+
+            aiColor3D kd(1, 1, 1), ks(0, 0, 0), ke(0, 0, 0);
+            tryGet(props, AI_MATKEY_COLOR_DIFFUSE, kd);
+            tryGet(props, AI_MATKEY_COLOR_SPECULAR, ks);
+            tryGet(props, AI_MATKEY_COLOR_EMISSIVE, ke);
+
+            float Ns = 32.0f, d = 1.0f, Ni = 1.5f;
+            tryGet(props, AI_MATKEY_SHININESS, Ns);
+            tryGet(props, AI_MATKEY_OPACITY, d);
+            tryGet(props, AI_MATKEY_REFRACTI, Ni);
+
+            outMaterial.core.phong.diffuse   = glm::vec4(kd.r, kd.g, kd.b, d);
+            outMaterial.core.phong.specular  = glm::vec3(ks.r, ks.g, ks.b);
+            outMaterial.core.phong.shininess = std::max(Ns, 1.0f);
+            outMaterial.core.phong.opacity   = d;
+            outMaterial.core.phong.ior       = Ni;
+            outMaterial.core.phong.emissive  = glm::vec3(ke.r, ke.g, ke.b);
+
+            outMaterial.core.phong.diffuseTexture  = loadTexture(material, aiTextureType_DIFFUSE);
+            outMaterial.core.phong.specularTexture = loadTexture(material, aiTextureType_SPECULAR);
+            outMaterial.core.phong.normalTexture   = loadTexture(material, aiTextureType_NORMALS);
+            outMaterial.core.phong.opacityTexture  = loadTexture(material, aiTextureType_OPACITY);
+            outMaterial.core.phong.emissiveTexture = loadTexture(material, aiTextureType_EMISSIVE);
         }
         else
         {

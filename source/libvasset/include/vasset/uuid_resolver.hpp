@@ -32,7 +32,10 @@ namespace vasset
                 if (!vbase::try_parse_uuid(uuidStr.c_str(), uuid))
                     continue;
 
-                registerAsset(uuid, entry.sourcePath);
+                if (!entry.sourcePath.empty())
+                    registerAsset(uuid, entry.sourcePath);
+                if (!entry.importedPath.empty() && entry.importedPath != entry.sourcePath)
+                    m_PathToUUID[entry.importedPath] = uuid;
             }
         }
 
