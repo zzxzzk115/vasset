@@ -128,7 +128,14 @@ namespace vasset
 
         struct ImportOptions
         {
+            struct ShaderVirtualIncludeFile
+            {
+                std::string virtualPath;
+                std::string sourceText;
+            };
+
             std::vector<std::string> ignoredDirectories;
+            std::vector<ShaderVirtualIncludeFile> shaderVirtualIncludes;
             std::function<void(const ImportProgress&)> progress;
         };
 

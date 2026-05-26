@@ -1015,8 +1015,10 @@ namespace
         return out;
     }
 
-    uint64_t shaderLibraryDependencyHash(const std::filesystem::path& assetRoot,
-                                         const ShaderLibraryManifest&  manifest)
+    uint64_t shaderLibraryDependencyHash(
+        const std::filesystem::path& assetRoot,
+        const ShaderLibraryManifest&  manifest,
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes)
     {
         uint64_t h = hashString("shader-library-deps");
 
@@ -1030,13 +1032,21 @@ namespace
             h = hashFile(shaderRoot / shader, h);
         }
 
+        for (const auto& include : virtualIncludes)
+        {
+            h = hashString(include.virtualPath, h);
+            h = hashString(include.sourceText, h);
+        }
+
         return h;
     }
 
-    bool runShaderCompiler(const std::filesystem::path& assetRoot,
-                           const ShaderLibraryManifest& manifest,
-                           const std::filesystem::path& output,
-                           const bool                   webgpu)
+    bool runShaderCompiler(
+        const std::filesystem::path& assetRoot,
+        const ShaderLibraryManifest&  manifest,
+        const std::filesystem::path&  output,
+        const bool                    webgpu,
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes)
     {
         const auto shaderRoot = assetRoot / manifest.root;
         const auto shaders    = collectShaderManifestFiles(shaderRoot, manifest.shaders);
@@ -1079,6 +1089,13 @@ namespace
             request.options.materialAccessMode =
                 webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
             request.options.includeDirs.push_back(shaderRoot.generic_string());
+            for (const auto& include : virtualIncludes)
+            {
+                request.options.virtualIncludeFiles.push_back({
+                    .virtualPath = include.virtualPath,
+                    .sourceText  = include.sourceText,
+                });
+            }
             request.enableCache = false;
             if (engineKeywords)
             {
@@ -1169,7 +1186,11 @@ namespace
     }
 
     vbase::Result<vbase::UUID, vasset::AssetError>
-    importShaderLibraryManifest(vasset::VAssetRegistry& registry, vbase::StringView filePath, bool forceReimport)
+    importShaderLibraryManifest(
+        vasset::VAssetRegistry& registry,
+        vbase::StringView       filePath,
+        bool                    forceReimport,
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes)
     {
         namespace fs = std::filesystem;
 
@@ -1199,9 +1220,9 @@ namespace
         vimport.output   = relativeImportedPath;
 
         const uint64_t sourceHash     = hashFile(osPath);
-        const uint64_t dependencyHash = shaderLibraryDependencyHash(assetRoot, *manifest);
+        const uint64_t dependencyHash = shaderLibraryDependencyHash(assetRoot, *manifest, virtualIncludes);
         constexpr uint64_t paramsHash = 0;
-        constexpr auto importerVersion = "shader_library:1";
+        constexpr auto importerVersion = "shader_library:2";
         constexpr auto outputSchema = "vshlib:v4+vshweblib:1";
 
         auto       entry      = registry.lookup(lookupUUID);
@@ -1239,9 +1260,9 @@ namespace
             }
         }
 
-        if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false))
+        if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false, virtualIncludes))
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
-        if (!runShaderCompiler(assetRoot, *manifest, outWebGpu, true))
+        if (!runShaderCompiler(assetRoot, *manifest, outWebGpu, true, virtualIncludes))
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
 
         auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
@@ -3271,7 +3292,7 @@ namespace vasset
             else if (candidate.kind == CandidateKind::eShaderLibrary)
             {
                 std::cout << "[vasset] shaderlib: " << candidate.relativePath << std::endl;
-                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
+                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes);
                 if (!rr)
                 {
                     std::cerr << "[vasset] failed shaderlib: " << candidate.relativePath << " ("
@@ -3348,7 +3369,7 @@ namespace vasset
 
         if (isValidShaderLibraryManifest(osPath))
         {
-            auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport);
+            auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes);
             if (!rr)
                 return vbase::Result<void, AssetError>::err(rr.error());
             return vbase::Result<void, AssetError>::ok();
