@@ -3364,7 +3364,14 @@ namespace vasset
             }
             else if (isValidShaderLibraryManifest(entry.path()))
             {
-                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eShaderLibrary});
+                if (m_Options.importShaderLibraries)
+                {
+                    candidates.push_back({entry.path(), relPath, ext, CandidateKind::eShaderLibrary});
+                }
+                else
+                {
+                    ++skippedFiles;
+                }
             }
             else if (isValidSourceTextAsset(entry.path()))
             {

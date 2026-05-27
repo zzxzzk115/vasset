@@ -137,6 +137,7 @@ namespace vasset
             std::vector<std::string> ignoredDirectories;
             std::vector<ShaderVirtualIncludeFile> shaderVirtualIncludes;
             std::function<void(const ImportProgress&)> progress;
+            bool importShaderLibraries {true};
         };
 
         VAssetImporter(VAssetRegistry& registry);
