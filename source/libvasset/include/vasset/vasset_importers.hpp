@@ -42,6 +42,13 @@ namespace vasset
             bool     compressOnlyLargeTextures {true};
             uint32_t basisUCompressMinDimension {2048};
             uint64_t basisUCompressMinSourceBytes {2ULL * 1024ULL * 1024ULL};
+
+            // Editor import guardrail: very large authoring textures are
+            // resized before KTX2/BasisU encoding so preview/runtime loads do
+            // not stall on 4K+ source payloads.
+            bool     downscaleLargeTextures {true};
+            uint32_t downscaleMinDimension {4096};
+            uint32_t downscaleTargetDimension {2048};
         };
 
         VTextureImporter(VAssetRegistry& registry);
@@ -62,6 +69,9 @@ namespace vasset
         struct ImportOptions
         {
             bool generateMeshlets {true};
+            bool optimizeVertexCache {true};
+            bool optimizeOverdraw {true};
+            bool optimizeVertexFetch {true};
         };
 
         VMeshImporter(VAssetRegistry& registry);
@@ -84,6 +94,7 @@ namespace vasset
         VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index) const;
 
         static void generateMeshlets(VMesh& outMesh);
+        static void optimizeMeshIndices(VMesh& outMesh, const ImportOptions& options);
         void notifyProgress(std::string item, size_t processed, size_t total) const;
 
     private:

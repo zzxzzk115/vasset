@@ -368,12 +368,20 @@ namespace
         h = hashU64(options.compressOnlyLargeTextures ? 1u : 0u, h);
         h = hashU64(options.basisUCompressMinDimension, h);
         h = hashU64(options.basisUCompressMinSourceBytes, h);
+        h = hashU64(options.downscaleLargeTextures ? 1u : 0u, h);
+        h = hashU64(options.downscaleMinDimension, h);
+        h = hashU64(options.downscaleTargetDimension, h);
         return h;
     }
 
     uint64_t meshImportParamsHash(const vasset::VMeshImporter::ImportOptions& options)
     {
-        return hashU64(options.generateMeshlets ? 1u : 0u, hashString("mesh-params"));
+        uint64_t h = hashString("mesh-params");
+        h = hashU64(options.generateMeshlets ? 1u : 0u, h);
+        h = hashU64(options.optimizeVertexCache ? 1u : 0u, h);
+        h = hashU64(options.optimizeOverdraw ? 1u : 0u, h);
+        h = hashU64(options.optimizeVertexFetch ? 1u : 0u, h);
+        return h;
     }
 
     std::string sanitizeAssetSegment(std::string value)
@@ -1605,7 +1613,7 @@ namespace vasset
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash     = textureImportParamsHash(m_Options);
-        constexpr auto importerVersion = "texture:1";
+        constexpr auto importerVersion = "texture:2";
         constexpr auto outputSchema = "vtexture:1";
 
         auto       entry      = m_Registry.lookup(lookupUUID);
@@ -1800,6 +1808,68 @@ namespace vasset
             // Treat everything as RGBA
             channels = 4;
 
+            bool wasDownscaled = false;
+            std::vector<uint8_t> downscaled8;
+            std::vector<float>   downscaledf;
+            void*                sourcePixels = pixelGuard.p;
+
+            if (m_Options.downscaleLargeTextures && m_Options.downscaleTargetDimension > 0)
+            {
+                const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
+                if (longestEdge > m_Options.downscaleMinDimension)
+                {
+                    const double scale =
+                        static_cast<double>(m_Options.downscaleTargetDimension) / static_cast<double>(longestEdge);
+                    const int nextWidth  = std::max(1, static_cast<int>(std::round(static_cast<double>(width) * scale)));
+                    const int nextHeight =
+                        std::max(1, static_cast<int>(std::round(static_cast<double>(height) * scale)));
+
+                    if (hdr)
+                    {
+                        downscaledf.resize(static_cast<size_t>(nextWidth) * nextHeight * channels);
+                        if (!stbir_resize_float_linear(reinterpret_cast<const float*>(pixelGuard.p),
+                                                       width,
+                                                       height,
+                                                       0,
+                                                       downscaledf.data(),
+                                                       nextWidth,
+                                                       nextHeight,
+                                                       0,
+                                                       static_cast<stbir_pixel_layout>(STBIR_4CHANNEL)))
+                        {
+                            std::cerr << "Failed to downscale large float texture." << std::endl;
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+                        sourcePixels = downscaledf.data();
+                    }
+                    else
+                    {
+                        downscaled8.resize(static_cast<size_t>(nextWidth) * nextHeight * channels);
+                        if (!stbir_resize_uint8_srgb(reinterpret_cast<const unsigned char*>(pixelGuard.p),
+                                                     width,
+                                                     height,
+                                                     0,
+                                                     downscaled8.data(),
+                                                     nextWidth,
+                                                     nextHeight,
+                                                     0,
+                                                     static_cast<stbir_pixel_layout>(STBIR_4CHANNEL)))
+                        {
+                            std::cerr << "Failed to downscale large texture." << std::endl;
+                            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                        }
+                        sourcePixels = downscaled8.data();
+                    }
+
+                    std::cout << "Downscaled large texture " << osPath.filename().generic_string() << " from "
+                              << width << "x" << height << " to " << nextWidth << "x" << nextHeight << std::endl;
+                    width         = nextWidth;
+                    height        = nextHeight;
+                    wasDownscaled = true;
+                    targetFormat  = VTextureFileFormat::eKTX2;
+                }
+            }
+
             auto srcSize = hdr ? width * height * channels * sizeof(float) : width * height * channels;
 
             auto targetTextureFormat = hdr ? VTextureFormat::eRGBA32F : VTextureFormat::eRGBA8;
@@ -1825,7 +1895,7 @@ namespace vasset
                     const bool     largeEnoughResolution = longestEdge >= m_Options.basisUCompressMinDimension;
                     const bool     largeEnoughSourceSize =
                         !fileSizeEc && sourceFileBytes >= m_Options.basisUCompressMinSourceBytes;
-                    shouldCompressWithBasisU = largeEnoughResolution && largeEnoughSourceSize;
+                    shouldCompressWithBasisU = wasDownscaled || (largeEnoughResolution && largeEnoughSourceSize);
 
                     if (!shouldCompressWithBasisU)
                     {
@@ -1841,7 +1911,7 @@ namespace vasset
                     }
                 }
 
-                if (!shouldCompressWithBasisU)
+                if (!shouldCompressWithBasisU && !wasDownscaled)
                     targetFormat = textureFileFormatFromExtension(ext);
             }
 
@@ -1886,7 +1956,7 @@ namespace vasset
 
             // Set image data for base level
             if (ktxTexture_SetImageFromMemory(
-                    ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(pixelGuard.p), srcSize) !=
+                    ktxTexture(ktxGuard.p), 0, 0, 0, reinterpret_cast<const ktx_uint8_t*>(sourcePixels), srcSize) !=
                 KTX_SUCCESS)
             {
                 return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
@@ -1897,7 +1967,7 @@ namespace vasset
             {
                 uint32_t             mipW    = static_cast<uint32_t>(width);
                 uint32_t             mipH    = static_cast<uint32_t>(height);
-                const void*          prevPtr = pixelGuard.p;
+                const void*          prevPtr = sourcePixels;
                 std::vector<uint8_t> prev8;
                 std::vector<float>   prevf;
 
@@ -2121,7 +2191,7 @@ namespace vasset
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "model_prefab:5";
+        constexpr auto importerVersion = "model_prefab:6";
         constexpr auto outputSchema = "vmanifest:1+vmesh:3+default_transform:1";
 
         auto entry = m_Registry.lookup(manifestUUID);
@@ -2308,6 +2378,7 @@ namespace vasset
             const glm::vec3 localPivot = recenterMeshAroundBoundsCenter(nodeMesh);
             decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
 
+            optimizeMeshIndices(nodeMesh, m_Options);
             if (m_Options.generateMeshlets)
                 generateMeshlets(nodeMesh);
             finalizeMeshVertexFlags(nodeMesh);
@@ -2457,7 +2528,7 @@ namespace vasset
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash     = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "mesh:2";
+        constexpr auto importerVersion = "mesh:3";
         constexpr auto outputSchema = "vmesh:3";
 
         auto entry      = m_Registry.lookup(lookupUUID);
@@ -2514,6 +2585,8 @@ namespace vasset
 
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
+
+        optimizeMeshIndices(outMesh, m_Options);
 
         // Generate meshlets if enabled
         if (m_Options.generateMeshlets)
@@ -3086,6 +3159,8 @@ namespace vasset
 
             const uint32_t* subIndices = outMesh.indices.data() + sub.indexOffset;
             size_t          subCount   = sub.indexCount;
+            if (subCount == 0 || sub.vertexCount == 0)
+                continue;
 
             // allocate space for meshlet vertices and triangles
             size_t                       maxMeshlets = meshopt_buildMeshletsBound(subCount, maxVerts, maxTris);
@@ -3153,10 +3228,87 @@ namespace vasset
             }
 
             // Resize to actual used size
-            const auto& last = sub.meshletGroup.meshlets.back();
+            if (!sub.meshletGroup.meshlets.empty())
+            {
+                const auto& last = sub.meshletGroup.meshlets.back();
+                sub.meshletGroup.meshletVertices.resize(last.vertexOffset + last.vertexCount);
+                sub.meshletGroup.meshletTriangles.resize(last.triangleOffset + ((last.triangleCount * 3 + 3) & ~3));
+            }
+            else
+            {
+                sub.meshletGroup.meshletVertices.clear();
+                sub.meshletGroup.meshletTriangles.clear();
+            }
+        }
+    }
 
-            sub.meshletGroup.meshletVertices.resize(last.vertexOffset + last.vertexCount);
-            sub.meshletGroup.meshletTriangles.resize(last.triangleOffset + ((last.triangleCount * 3 + 3) & ~3));
+    void VMeshImporter::optimizeMeshIndices(VMesh& outMesh, const ImportOptions& options)
+    {
+        if (outMesh.indices.empty() || outMesh.positions.empty())
+            return;
+
+        for (const auto& sub : outMesh.subMeshes)
+        {
+            if (sub.indexCount == 0 || sub.vertexCount == 0)
+                continue;
+            if (sub.indexOffset + sub.indexCount > outMesh.indices.size() ||
+                sub.vertexOffset + sub.vertexCount > outMesh.positions.size())
+                continue;
+
+            auto* indices = outMesh.indices.data() + sub.indexOffset;
+            if (options.optimizeVertexCache)
+            {
+                std::vector<uint32_t> optimized(sub.indexCount);
+                meshopt_optimizeVertexCache(optimized.data(), indices, sub.indexCount, sub.vertexCount);
+                std::copy(optimized.begin(), optimized.end(), indices);
+            }
+
+            if (options.optimizeOverdraw)
+            {
+                std::vector<uint32_t> optimized(sub.indexCount);
+                meshopt_optimizeOverdraw(optimized.data(),
+                                         indices,
+                                         sub.indexCount,
+                                         reinterpret_cast<const float*>(outMesh.positions.data() + sub.vertexOffset),
+                                         sub.vertexCount,
+                                         sizeof(glm::vec3),
+                                         1.05f);
+                std::copy(optimized.begin(), optimized.end(), indices);
+            }
+
+            if (options.optimizeVertexFetch)
+            {
+                std::vector<uint32_t> remap(sub.vertexCount);
+                const size_t usedVertexCount =
+                    meshopt_optimizeVertexFetchRemap(remap.data(), indices, sub.indexCount, sub.vertexCount);
+                if (usedVertexCount == 0)
+                    continue;
+
+                std::vector<uint32_t> remappedIndices(sub.indexCount);
+                meshopt_remapIndexBuffer(remappedIndices.data(), indices, sub.indexCount, remap.data());
+                std::copy(remappedIndices.begin(), remappedIndices.end(), indices);
+
+                auto remapVertexSlice = [&](auto& values) {
+                    using Value = typename std::decay_t<decltype(values)>::value_type;
+                    if (values.size() != outMesh.vertexCount)
+                        return;
+                    std::vector<Value> source(values.begin() + static_cast<std::ptrdiff_t>(sub.vertexOffset),
+                                              values.begin() +
+                                                  static_cast<std::ptrdiff_t>(sub.vertexOffset + sub.vertexCount));
+                    std::vector<Value> remapped(sub.vertexCount);
+                    meshopt_remapVertexBuffer(remapped.data(), source.data(), sub.vertexCount, sizeof(Value), remap.data());
+                    std::copy(remapped.begin(), remapped.end(), values.begin() + static_cast<std::ptrdiff_t>(sub.vertexOffset));
+                };
+
+                remapVertexSlice(outMesh.positions);
+                remapVertexSlice(outMesh.normals);
+                remapVertexSlice(outMesh.colors);
+                remapVertexSlice(outMesh.texCoords0);
+                remapVertexSlice(outMesh.texCoords1);
+                remapVertexSlice(outMesh.tangents);
+                remapVertexSlice(outMesh.jointIndices);
+                remapVertexSlice(outMesh.jointWeights);
+            }
         }
     }
 
