@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vasset
@@ -64,6 +65,7 @@ namespace vasset
         VMeshImporter(VAssetRegistry& registry);
 
         VMeshImporter& setOptions(const ImportOptions& options);
+        VMeshImporter& setProgressCallback(std::function<void(std::string, size_t, size_t)> callback);
 
         vbase::Result<vbase::UUID, AssetError>
         importMesh(vbase::StringView filePath, VMesh& outMesh, bool forceReimport = false);
@@ -80,12 +82,17 @@ namespace vasset
         VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index) const;
 
         static void generateMeshlets(VMesh& outMesh);
+        void notifyProgress(std::string item, size_t processed, size_t total) const;
 
     private:
         VAssetRegistry&  m_Registry;
         VTextureImporter m_TextureImporter;
         ImportOptions    m_Options;
         std::string      m_FilePath;
+        std::function<void(std::string, size_t, size_t)> m_ProgressCallback;
+        mutable std::unordered_map<std::string, vbase::UUID> m_ModelTextureCache;
+        mutable size_t m_ModelProgressProcessed {0};
+        mutable size_t m_ModelProgressTotal {0};
     };
 
     class VGaussianSplatImporter

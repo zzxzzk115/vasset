@@ -59,6 +59,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -2077,6 +2078,18 @@ namespace vasset
         return *this;
     }
 
+    VMeshImporter& VMeshImporter::setProgressCallback(std::function<void(std::string, size_t, size_t)> callback)
+    {
+        m_ProgressCallback = std::move(callback);
+        return *this;
+    }
+
+    void VMeshImporter::notifyProgress(std::string item, size_t processed, size_t total) const
+    {
+        if (m_ProgressCallback)
+            m_ProgressCallback(std::move(item), processed, total);
+    }
+
     vbase::Result<vbase::UUID, AssetError>
     VMeshImporter::importModelPrefab(vbase::StringView filePath, VMesh& outMesh, bool forceReimport)
     {
@@ -2138,6 +2151,39 @@ namespace vasset
         const aiScene* scene = importer.ReadFile(filePath.data(), flags);
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        m_ModelTextureCache.clear();
+        m_ModelProgressProcessed = 0;
+        std::unordered_set<std::string> referencedTextures;
+        for (unsigned int materialIndex = 0; materialIndex < scene->mNumMaterials; ++materialIndex)
+        {
+            const auto* material = scene->mMaterials[materialIndex];
+            if (!material)
+                continue;
+
+            for (int tt = static_cast<int>(aiTextureType_NONE) + 1; tt <= static_cast<int>(aiTextureType_UNKNOWN); ++tt)
+            {
+                const auto     type  = static_cast<aiTextureType>(tt);
+                const unsigned count = material->GetTextureCount(type);
+                for (unsigned ti = 0; ti < count; ++ti)
+                {
+                    aiString path;
+                    if (material->GetTexture(type, ti, &path) != aiReturn_SUCCESS || path.length == 0 ||
+                        path.data[0] == '*')
+                    {
+                        continue;
+                    }
+
+                    const auto texturePath =
+                        (std::filesystem::path(m_FilePath).parent_path() / std::filesystem::path(path.C_Str()))
+                            .lexically_normal()
+                            .generic_string();
+                    referencedTextures.insert(texturePath);
+                }
+            }
+        }
+        m_ModelProgressTotal = referencedTextures.size() + scene->mNumMeshes + 1;
+        notifyProgress(relativeSrcPath, m_ModelProgressProcessed, m_ModelProgressTotal);
 
         {
             const std::string cookedMeshPrefix =
@@ -2262,6 +2308,9 @@ namespace vasset
             if (!rr)
                 throw rr.error();
 
+            ++m_ModelProgressProcessed;
+            notifyProgress(relativeMeshSourcePath, m_ModelProgressProcessed, m_ModelProgressTotal);
+
             if (!assignedOutMesh)
             {
                 outMesh = nodeMesh;
@@ -2352,6 +2401,9 @@ namespace vasset
         auto rr = m_Registry.registerAsset(manifestUUID, relativeSrcPath, relativeManifestPath, VAssetType::eSceneManifest);
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        ++m_ModelProgressProcessed;
+        notifyProgress(relativeManifestPath, m_ModelProgressProcessed, m_ModelProgressTotal);
 
         auto dr = updateImportDatabaseRecord(m_Registry,
                                              manifestUUID,
@@ -2978,9 +3030,12 @@ namespace vasset
                 VTexture              texture {};
                 std::filesystem::path relativePath(str.C_Str());
 
-                std::filesystem::path texPath = std::filesystem::path(m_FilePath).parent_path() / relativePath;
+                std::filesystem::path texPath = (std::filesystem::path(m_FilePath).parent_path() / relativePath).lexically_normal();
+                const auto            texKey  = texPath.generic_string();
+                if (auto cachedIt = m_ModelTextureCache.find(texKey); cachedIt != m_ModelTextureCache.end())
+                    return VTextureRef {cachedIt->second};
 
-                auto tr = m_TextureImporter.importTexture(texPath.generic_string(), texture);
+                auto tr = m_TextureImporter.importTexture(texKey, texture);
                 if (!tr)
                 {
                     std::cerr << "Failed to import texture: " << texPath << std::endl;
@@ -2988,6 +3043,9 @@ namespace vasset
                 }
 
                 const auto uuid = tr.value();
+                m_ModelTextureCache.emplace(texKey, uuid);
+                ++m_ModelProgressProcessed;
+                notifyProgress(texKey, m_ModelProgressProcessed, m_ModelProgressTotal);
 
                 // Optional verbose log
                 std::cout << "  Loaded texture: " << texPath << ", uuid: " << vbase::to_string(uuid) << std::endl;
@@ -3408,8 +3466,18 @@ namespace vasset
             else if (candidate.kind == CandidateKind::eMesh)
             {
                 std::cout << "[vasset] mesh     : " << candidate.relativePath << std::endl;
+                m_MeshImporter.setProgressCallback([this](std::string item, size_t processed, size_t total) {
+                    if (m_Options.progress)
+                    {
+                        m_Options.progress(ImportProgress {.phase          = ImportProgress::Phase::eImport,
+                                                           .processedFiles = processed,
+                                                           .totalFiles     = total,
+                                                           .currentPath    = std::move(item)});
+                    }
+                });
                 VMesh mesh;
                 auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
+                m_MeshImporter.setProgressCallback({});
                 if (!mr)
                 {
                     std::cerr << "[vasset] failed mesh     : " << candidate.relativePath << " ("
@@ -3480,7 +3548,19 @@ namespace vasset
         if (isIgnoredAssetImportPath(relPath, ignoredDirectories))
             return vbase::Result<void, AssetError>::err(AssetError::eNotSupported);
 
+        auto notifyProgress = [this, &relPath](ImportProgress::Phase phase, size_t processedFiles) {
+            if (m_Options.progress)
+            {
+                m_Options.progress(ImportProgress {.phase          = phase,
+                                                   .processedFiles = processedFiles,
+                                                   .totalFiles     = 1,
+                                                   .currentPath    = relPath});
+            }
+        };
+
+        notifyProgress(ImportProgress::Phase::eScan, 0);
         const std::string ext = osPath.extension().generic_string();
+        notifyProgress(ImportProgress::Phase::eImport, 0);
 
         if (isValidTexture(ext))
         {
@@ -3488,13 +3568,24 @@ namespace vasset
             auto     tr = m_TextureImporter.importTexture(filePath, texture, reimport);
             if (!tr)
                 return vbase::Result<void, AssetError>::err(tr.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }
 
         if (isValidModel(ext))
         {
+            m_MeshImporter.setProgressCallback([this](std::string item, size_t processed, size_t total) {
+                if (m_Options.progress)
+                {
+                    m_Options.progress(ImportProgress {.phase          = ImportProgress::Phase::eImport,
+                                                       .processedFiles = processed,
+                                                       .totalFiles     = total,
+                                                       .currentPath    = std::move(item)});
+                }
+            });
             VMesh mesh;
             auto  mr = m_MeshImporter.importMesh(filePath, mesh, reimport);
+            m_MeshImporter.setProgressCallback({});
             if (!mr)
                 return vbase::Result<void, AssetError>::err(mr.error());
             return vbase::Result<void, AssetError>::ok();
@@ -3506,6 +3597,7 @@ namespace vasset
             auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
             if (!gr)
                 return vbase::Result<void, AssetError>::err(gr.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }
 
@@ -3514,6 +3606,7 @@ namespace vasset
             auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes);
             if (!rr)
                 return vbase::Result<void, AssetError>::err(rr.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }
 
@@ -3523,6 +3616,7 @@ namespace vasset
             auto rr   = importSourceTextAsset(m_Registry, filePath, reimport, type);
             if (!rr)
                 return vbase::Result<void, AssetError>::err(rr.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }
 
