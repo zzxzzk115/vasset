@@ -28,12 +28,14 @@ namespace vasset
             bool               flipY {false};
             VTextureFileFormat targetTextureFileFormat {VTextureFileFormat::eKTX2};
 
-            // BasisU options, only used if targetTextureFileFormat is eKTX2
-            bool     uastc {false};         // true: high quality; false: fast compression
+            // BasisU options, only used if targetTextureFileFormat is eKTX2.
+            // Defaults favor fast, low-artifact editor imports. Use higher compression
+            // levels explicitly for slower final/package-quality imports.
+            bool     uastc {true};          // true: UASTC quality path; false: ETC1S smaller-size path
             bool     noSSE {false};         // true: disable SSE; false: enable SSE
-            uint32_t qualityLevel {255};    // 1-255
-            uint32_t compressionLevel {2};  // 0-4
-            uint32_t basisUThreadCount {0}; // 0 = auto-detect
+            uint32_t qualityLevel {128};    // ETC1S only, 1-255
+            uint32_t compressionLevel {0};  // UASTC 0-4, 0 = fastest
+            uint32_t basisUThreadCount {0}; // 0 = hardware concurrency
 
             // By default, only large source textures pay the BasisU encode cost.
             // Smaller source images keep their original encoded payload.

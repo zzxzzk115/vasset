@@ -1,5 +1,6 @@
 add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
 local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or has_config("vasset_enable_wasm_import"))
+local enable_ktx_opencl = not is_plat("android", "wasm", "iphoneos")
 local vshadersystem_configs = {debug = is_mode("debug")}
 if is_host("windows") then
     vshadersystem_configs.runtimes = is_mode("debug") and "MTd" or "MT"
@@ -9,7 +10,15 @@ if enable_import_targets then
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
     add_requires("vshadersystem v0.10.0", {configs = vshadersystem_configs})
 end
-add_requires("ktx", {configs = {decoder = true, vulkan = true, shared = false}})
+add_requires("ktx", {configs = {
+    decoder = true,
+    opencl = enable_ktx_opencl,
+    shared = false,
+    vulkan = true,
+}})
+if enable_ktx_opencl then
+    add_requires("opencl")
+end
 
 local runtime_headers = {
     "include/(vasset/asset_error.hpp)",
@@ -51,6 +60,9 @@ target("vasset")
     add_deps("dds-ktx", "vfilesystem", {public = true})
     add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })
     add_packages("ktx", { public = true })
+    if enable_ktx_opencl then
+        add_packages("opencl", { public = true })
+    end
     if is_mode("debug") then
         add_defines("_DEBUG", { public = true })
     else

@@ -58,6 +58,7 @@
 #include <regex>
 #include <sstream>
 #include <cstdlib>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -111,6 +112,15 @@ namespace
     bool isCompressedTexture(vbase::StringView ext) { return isKTXDDS(ext) || isKTX2(ext); }
 
     bool isValidTexture(vbase::StringView ext) { return isCompressedTexture(ext) || isEXR(ext) || isSTB(ext); }
+
+    uint32_t resolveBasisUThreadCount(uint32_t requestedThreadCount)
+    {
+        if (requestedThreadCount != 0)
+            return requestedThreadCount;
+
+        const auto hardwareThreadCount = std::thread::hardware_concurrency();
+        return hardwareThreadCount > 0 ? hardwareThreadCount : 1;
+    }
 
     bool hasSuffix(const std::string& value, const std::string& suffix)
     {
@@ -1973,10 +1983,14 @@ namespace vasset
                 params.noSSE            = m_Options.noSSE;
                 params.qualityLevel     = m_Options.qualityLevel;
                 params.compressionLevel = m_Options.compressionLevel;
-                params.threadCount      = m_Options.basisUThreadCount;
+                params.threadCount      = resolveBasisUThreadCount(m_Options.basisUThreadCount);
 
                 // Diagnostic: log vkFormat and mip count
-                std::cout << "BasisU: vkFormat=" << ci.vkFormat << " numLevels=" << ci.numLevels << "\n";
+                std::cout << "BasisU: vkFormat=" << ci.vkFormat << " numLevels=" << ci.numLevels
+                          << " mode=" << (params.uastc ? "UASTC" : "ETC1S")
+                          << " quality=" << params.qualityLevel
+                          << " compressionLevel=" << params.compressionLevel
+                          << " threads=" << params.threadCount << "\n";
 
                 KTX_error_code res = ktxTexture2_CompressBasisEx(ktxGuard.p, &params);
                 if (res != KTX_SUCCESS)
