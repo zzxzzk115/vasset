@@ -6,6 +6,33 @@
 
 using namespace vasset;
 
+namespace
+{
+    std::filesystem::path findDefaultAssetRoot()
+    {
+        auto hasExampleAssets = [](const std::filesystem::path& root) {
+            return std::filesystem::exists(root / "models" / "DamagedHelmet" / "DamagedHelmet.gltf") &&
+                   std::filesystem::exists(root / "textures" / "awesomeface.png");
+        };
+
+        for (auto dir = std::filesystem::current_path(); !dir.empty(); dir = dir.parent_path())
+        {
+            const auto externalResources = dir / "external" / "vasset" / "resources";
+            if (hasExampleAssets(externalResources))
+                return externalResources;
+
+            const auto resources = dir / "resources";
+            if (hasExampleAssets(resources))
+                return resources;
+
+            if (dir == dir.root_path())
+                break;
+        }
+
+        return "resources";
+    }
+} // namespace
+
 int main(int argc, char** argv)
 {
     constexpr const char* MODEL_PATH = "models/DamagedHelmet/DamagedHelmet.gltf";
@@ -15,7 +42,7 @@ int main(int argc, char** argv)
         "res://models/DamagedHelmet/DamagedHelmet.gltf#mesh/0_node_damagedHelmet_-6514_mesh_0_mesh_helmet_LP_13930damagedHelmet";
     constexpr const char* RES_TEXTURE_PATH = "res://textures/awesomeface.png";
 
-    const std::filesystem::path assetRoot = argc > 1 ? std::filesystem::path(argv[1]) : std::filesystem::path("resources");
+    const std::filesystem::path assetRoot = argc > 1 ? std::filesystem::path(argv[1]) : findDefaultAssetRoot();
     const std::filesystem::path outVpk    = argc > 2 ? std::filesystem::path(argv[2]) : std::filesystem::path("out.vpk");
     const std::filesystem::path registryPath = assetRoot / "imported" / "asset_registry.tsv";
 

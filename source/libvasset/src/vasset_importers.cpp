@@ -2191,8 +2191,8 @@ namespace vasset
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "model_prefab:6";
-        constexpr auto outputSchema = "vmanifest:1+vmesh:3+default_transform:1";
+        constexpr auto importerVersion = "model_prefab:7";
+        constexpr auto outputSchema = "vmanifest:1+vmesh:3+default_transform:1+node_transform:1";
 
         auto entry = m_Registry.lookup(manifestUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -2316,15 +2316,33 @@ namespace vasset
                    std::abs(m.d3 - identity.d3) < eps && std::abs(m.d4 - identity.d4) < eps;
         };
 
-        const auto decomposeDefaultTransform = [](const aiMatrix4x4& transform, VMesh& mesh) {
+        struct DecomposedNodeTransform
+        {
+            glm::vec3 position {0.0f};
+            glm::quat rotation {1.0f, 0.0f, 0.0f, 0.0f};
+            glm::vec3 scale {1.0f};
+        };
+
+        const auto decomposeTransform = [](const aiMatrix4x4& transform) {
             aiVector3D scaling(1.0f, 1.0f, 1.0f);
             aiQuaternion rotation;
             aiVector3D position(0.0f, 0.0f, 0.0f);
             transform.Decompose(scaling, rotation, position);
+
+            return DecomposedNodeTransform {
+                .position = glm::vec3 {position.x, position.y, position.z},
+                .rotation = glm::quat {rotation.w, rotation.x, rotation.y, rotation.z},
+                .scale    = glm::vec3 {scaling.x, scaling.y, scaling.z},
+            };
+        };
+
+        const auto decomposeDefaultTransform = [&](const aiMatrix4x4& transform, VMesh& mesh) {
+            const auto decomposed = decomposeTransform(transform);
             mesh.hasDefaultTransform = true;
-            mesh.defaultPosition = glm::vec3 {position.x, position.y, position.z};
-            mesh.defaultRotation = glm::quat {rotation.w, rotation.x, rotation.y, rotation.z};
-            mesh.defaultScale = glm::vec3 {scaling.x, scaling.y, scaling.z};
+            mesh.defaultPosition = decomposed.position;
+            mesh.defaultRotation = decomposed.rotation;
+            mesh.defaultScale    = decomposed.scale;
+            return decomposed;
         };
 
         const auto recenterMeshAroundBoundsCenter = [](VMesh& mesh) {
@@ -2357,8 +2375,9 @@ namespace vasset
 
         struct ImportedNodeMeshPaths
         {
-            std::string sourcePath;
-            std::string importedPath;
+            std::string             sourcePath;
+            std::string             importedPath;
+            DecomposedNodeTransform transform;
         };
 
         const auto importNodeMesh = [&](const aiMesh* aiMesh,
@@ -2376,7 +2395,8 @@ namespace vasset
 
             processMesh(aiMesh, scene, nodeMesh);
             const glm::vec3 localPivot = recenterMeshAroundBoundsCenter(nodeMesh);
-            decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
+            const auto      nodeTransform =
+                decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
 
             optimizeMeshIndices(nodeMesh, m_Options);
             if (m_Options.generateMeshlets)
@@ -2405,6 +2425,7 @@ namespace vasset
             return ImportedNodeMeshPaths {
                 .sourcePath   = relativeMeshSourcePath,
                 .importedPath = relativeMeshPath,
+                .transform    = nodeTransform,
             };
         };
 
@@ -2427,6 +2448,13 @@ namespace vasset
 
                 manifest << "[node id=" << meshNodeId << " name=\"" << escapeSceneString(meshName)
                          << "\" parent=1 uuid=\"" << vbase::to_string(meshNodeUUID) << "\"]\n";
+                const auto& t = meshPaths.transform;
+                manifest << "TransformComponent/position = (" << t.position.x << ", " << t.position.y << ", "
+                         << t.position.z << ")\n";
+                manifest << "TransformComponent/rotation = (" << t.rotation.x << ", " << t.rotation.y << ", "
+                         << t.rotation.z << ", " << t.rotation.w << ")\n";
+                manifest << "TransformComponent/scale = (" << t.scale.x << ", " << t.scale.y << ", " << t.scale.z
+                         << ")\n";
                 manifest << "MeshComponent/mesh = \"res://" << escapeSceneString(meshPaths.sourcePath) << "\"\n";
                 manifest << "MeshComponent/builtinGeometry = 4294967295\n";
                 manifest << "MeshComponent/materialColor = (1, 1, 1, 1)\n\n";
