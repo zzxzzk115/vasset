@@ -85,6 +85,10 @@ namespace vasset
         glm::quat defaultRotation {1.0f, 0.0f, 0.0f, 0.0f};
         glm::vec3 defaultScale {1.0f};
 
+        bool      hasLocalBounds {false};
+        glm::vec3 localBoundsMin {0.0f};
+        glm::vec3 localBoundsMax {0.0f};
+
         std::string sourceFileName; // Not serialized
     };
 

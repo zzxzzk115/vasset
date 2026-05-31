@@ -49,6 +49,11 @@ namespace vasset
             bool     downscaleLargeTextures {true};
             uint32_t downscaleMinDimension {4096};
             uint32_t downscaleTargetDimension {2048};
+
+            // Normal-map authoring formats such as BC5/ATI2 only store XY.
+            // When enabled, import bakes them to a runtime-generic RGB normal map.
+            bool bakeNormalMap {false};
+            bool directXNormalMap {false};
         };
 
         VTextureImporter(VAssetRegistry& registry);
@@ -92,6 +97,7 @@ namespace vasset
         // - If index is omitted, loads the first texture (index 0).
         VTextureRef loadTexture(const aiMaterial*, aiTextureType) const;
         VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index) const;
+        VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index, bool directXNormalMap) const;
 
         static void generateMeshlets(VMesh& outMesh);
         static void optimizeMeshIndices(VMesh& outMesh, const ImportOptions& options);

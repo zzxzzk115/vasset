@@ -6,6 +6,7 @@
 #include "vasset/vimport.hpp"
 
 #include <vbase/core/result.hpp>
+#include <vbase/core/scope_exit.hpp>
 
 #include <ktx.h>
 
@@ -42,6 +43,7 @@
 #include <meshoptimizer.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -59,6 +61,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -125,6 +128,56 @@ namespace
     bool hasSuffix(const std::string& value, const std::string& suffix)
     {
         return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    std::string toLowerAscii(std::string value)
+    {
+        std::ranges::transform(value, value.begin(), [](const unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    }
+
+    bool isLikelyNormalMapPath(const std::filesystem::path& path)
+    {
+        const auto filename = toLowerAscii(path.filename().generic_string());
+        return filename.find("normal") != std::string::npos || filename.find("_n.") != std::string::npos ||
+               filename.find("-n.") != std::string::npos;
+    }
+
+    std::filesystem::path findImportHintReadme(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        auto            dir = path.parent_path();
+        for (uint32_t i = 0; i < 4u && !dir.empty(); ++i)
+        {
+            auto candidate = dir / "README.txt";
+            if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec))
+                return candidate;
+
+            const auto parent = dir.parent_path();
+            if (parent == dir)
+                break;
+            dir = parent;
+        }
+        return {};
+    }
+
+    bool readmeDeclaresDirectXNormal(const std::filesystem::path& readmePath)
+    {
+        if (readmePath.empty())
+            return false;
+
+        std::ifstream file(readmePath);
+        if (!file)
+            return false;
+
+        std::ostringstream content;
+        content << file.rdbuf();
+        const auto text = toLowerAscii(content.str());
+        return text.find("normal (directx)") != std::string::npos ||
+               text.find("normal: directx") != std::string::npos ||
+               text.find("directx normal") != std::string::npos;
     }
 
     vasset::VTextureFileFormat textureFileFormatFromExtension(vbase::StringView ext)
@@ -371,6 +424,8 @@ namespace
         h = hashU64(options.downscaleLargeTextures ? 1u : 0u, h);
         h = hashU64(options.downscaleMinDimension, h);
         h = hashU64(options.downscaleTargetDimension, h);
+        h = hashU64(options.bakeNormalMap ? 1u : 0u, h);
+        h = hashU64(options.directXNormalMap ? 1u : 0u, h);
         return h;
     }
 
@@ -427,6 +482,33 @@ namespace
             mesh.vertexFlags |= vasset::VVertexFlags::eTexCoord1;
         if (mesh.tangents.size() == mesh.vertexCount)
             mesh.vertexFlags |= vasset::VVertexFlags::eTangent;
+    }
+
+    void updateMeshLocalBounds(vasset::VMesh& mesh)
+    {
+        mesh.hasLocalBounds = false;
+        mesh.localBoundsMin = glm::vec3 {0.0f};
+        mesh.localBoundsMax = glm::vec3 {0.0f};
+        if (mesh.positions.empty())
+            return;
+
+        glm::vec3 minP(std::numeric_limits<float>::infinity());
+        glm::vec3 maxP(-std::numeric_limits<float>::infinity());
+        for (const auto& position : mesh.positions)
+        {
+            minP = glm::min(minP, position);
+            maxP = glm::max(maxP, position);
+        }
+
+        if (!std::isfinite(minP.x) || !std::isfinite(minP.y) || !std::isfinite(minP.z) ||
+            !std::isfinite(maxP.x) || !std::isfinite(maxP.y) || !std::isfinite(maxP.z))
+        {
+            return;
+        }
+
+        mesh.hasLocalBounds = true;
+        mesh.localBoundsMin = minP;
+        mesh.localBoundsMax = maxP;
     }
 
     void writeSceneVec3(std::ostringstream& out, const char* component, const char* field, const aiVector3D& value)
@@ -591,6 +673,175 @@ namespace
         return 1 + static_cast<uint32_t>(std::floor(std::log2(static_cast<double>(std::max(width, height)))));
     }
 
+    std::array<uint8_t, 16> decodeBC4Block(const uint8_t* block)
+    {
+        std::array<uint8_t, 8> palette {};
+        palette[0] = block[0];
+        palette[1] = block[1];
+        if (palette[0] > palette[1])
+        {
+            for (uint32_t i = 1; i < 7; ++i)
+            {
+                palette[i + 1] = static_cast<uint8_t>(
+                    ((7u - i) * static_cast<uint32_t>(palette[0]) + i * static_cast<uint32_t>(palette[1]) + 3u) /
+                    7u);
+            }
+        }
+        else
+        {
+            for (uint32_t i = 1; i < 5; ++i)
+            {
+                palette[i + 1] = static_cast<uint8_t>(
+                    ((5u - i) * static_cast<uint32_t>(palette[0]) + i * static_cast<uint32_t>(palette[1]) + 2u) /
+                    5u);
+            }
+            palette[6] = 0u;
+            palette[7] = 255u;
+        }
+
+        uint64_t indices = 0u;
+        for (uint32_t i = 0; i < 6; ++i)
+            indices |= static_cast<uint64_t>(block[2u + i]) << (8u * i);
+
+        std::array<uint8_t, 16> out {};
+        for (uint32_t i = 0; i < 16; ++i)
+            out[i] = palette[static_cast<uint32_t>((indices >> (3u * i)) & 0x7u)];
+        return out;
+    }
+
+    uint8_t encodeNormalChannel(float value)
+    {
+        value = std::clamp(value * 0.5f + 0.5f, 0.0f, 1.0f);
+        return static_cast<uint8_t>(std::round(value * 255.0f));
+    }
+
+    bool bakeBC5NormalToRGBA8(const ddsktx_texture_info& tc,
+                              const uint8_t*            sourceBytes,
+                              const size_t              sourceSize,
+                              const bool                directXNormalMap,
+                              std::vector<uint8_t>&     outPixels)
+    {
+        if (tc.format != DDSKTX_FORMAT_BC5 || tc.width <= 0 || tc.height <= 0)
+            return false;
+
+        ddsktx_sub_data subData {};
+        ddsktx_get_sub(&tc, &subData, sourceBytes, static_cast<int>(sourceSize), 0, 0, 0);
+        if (!subData.buff)
+            return false;
+
+        const uint32_t width       = static_cast<uint32_t>(tc.width);
+        const uint32_t height      = static_cast<uint32_t>(tc.height);
+        const uint32_t blockWidth  = (width + 3u) / 4u;
+        const uint32_t blockHeight = (height + 3u) / 4u;
+        outPixels.assign(static_cast<size_t>(width) * height * 4u, 255u);
+
+        const auto* blocks = static_cast<const uint8_t*>(subData.buff);
+        for (uint32_t by = 0; by < blockHeight; ++by)
+        {
+            for (uint32_t bx = 0; bx < blockWidth; ++bx)
+            {
+                const uint8_t* block = blocks + (static_cast<size_t>(by) * blockWidth + bx) * 16u;
+                const auto     xs    = decodeBC4Block(block);
+                const auto     ys    = decodeBC4Block(block + 8u);
+                for (uint32_t py = 0; py < 4u; ++py)
+                {
+                    const uint32_t y = by * 4u + py;
+                    if (y >= height)
+                        continue;
+                    for (uint32_t px = 0; px < 4u; ++px)
+                    {
+                        const uint32_t x = bx * 4u + px;
+                        if (x >= width)
+                            continue;
+
+                        const uint32_t local = py * 4u + px;
+                        glm::vec3      normal {
+                            static_cast<float>(xs[local]) / 127.5f - 1.0f,
+                            static_cast<float>(ys[local]) / 127.5f - 1.0f,
+                            0.0f,
+                        };
+                        if (directXNormalMap)
+                            normal.y = -normal.y;
+                        normal.z = std::sqrt(std::max(1.0f - (normal.x * normal.x + normal.y * normal.y), 0.0f));
+                        normal   = glm::normalize(normal);
+
+                        const size_t dst = (static_cast<size_t>(y) * width + x) * 4u;
+                        outPixels[dst + 0u] = encodeNormalChannel(normal.x);
+                        outPixels[dst + 1u] = encodeNormalChannel(normal.y);
+                        outPixels[dst + 2u] = encodeNormalChannel(normal.z);
+                        outPixels[dst + 3u] = 255u;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool writeRGBA8ToKTX2(const uint32_t                                width,
+                          const uint32_t                                height,
+                          const std::vector<uint8_t>&                   pixels,
+                          const vasset::VTextureImporter::ImportOptions& options,
+                          const bool                                    compressWithBasisU,
+                          vasset::VTexture&                             outTexture)
+    {
+        if (width == 0 || height == 0 || pixels.size() != static_cast<size_t>(width) * height * 4u)
+            return false;
+
+        ktxTexture2* ktx = nullptr;
+        ktxTextureCreateInfo ci {};
+        ci.baseWidth       = width;
+        ci.baseHeight      = height;
+        ci.baseDepth       = 1;
+        ci.numLevels       = 1;
+        ci.numLayers       = 1;
+        ci.numFaces        = 1;
+        ci.numDimensions   = 2;
+        ci.isArray         = KTX_FALSE;
+        ci.generateMipmaps = KTX_FALSE;
+        ci.vkFormat        = static_cast<uint32_t>(vasset::VTextureFormat::eRGBA8);
+
+        if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktx) != KTX_SUCCESS)
+            return false;
+        auto destroy = vbase::ScopeExit([&] { ktxTexture_Destroy(ktxTexture(ktx)); });
+
+        if (ktxTexture_SetImageFromMemory(ktxTexture(ktx), 0, 0, 0, pixels.data(), pixels.size()) != KTX_SUCCESS)
+            return false;
+
+        if (compressWithBasisU)
+        {
+            ktxBasisParams params {};
+            params.structSize       = sizeof(ktxBasisParams);
+            params.uastc            = options.uastc;
+            params.noSSE            = options.noSSE;
+            params.qualityLevel     = options.qualityLevel;
+            params.compressionLevel = options.compressionLevel;
+            params.threadCount      = resolveBasisUThreadCount(options.basisUThreadCount);
+
+            const KTX_error_code res = ktxTexture2_CompressBasisEx(ktx, &params);
+            if (res != KTX_SUCCESS)
+                return false;
+        }
+
+        ktx_size_t   size = 0;
+        ktx_uint8_t* mem  = nullptr;
+        if (ktxTexture_WriteToMemory(ktxTexture(ktx), &mem, &size) != KTX_SUCCESS)
+            return false;
+        auto freeMem = vbase::ScopeExit([&] { std::free(mem); });
+
+        outTexture.width       = width;
+        outTexture.height      = height;
+        outTexture.depth       = 1;
+        outTexture.mipLevels   = 1;
+        outTexture.arrayLayers = 1;
+        outTexture.isCubemap   = false;
+        outTexture.type        = vasset::VTextureDimension::e2D;
+        outTexture.format      = vasset::VTextureFormat::eRGBA8;
+        outTexture.fileFormat  = vasset::VTextureFileFormat::eKTX2;
+        outTexture.compressedBasisU = ktxTexture2_NeedsTranscoding(ktx) != 0;
+        outTexture.data.assign(mem, mem + size);
+        return true;
+    }
+
     std::vector<uint8_t> readAll(const std::filesystem::path& p)
     {
         std::ifstream f(p, std::ios::binary | std::ios::ate);
@@ -602,6 +853,137 @@ namespace
         if (!f.read(reinterpret_cast<char*>(data.data()), sz))
             return {};
         return data;
+    }
+
+    enum class TextureAlphaContent
+    {
+        eUnknown,
+        eOpaque,
+        eHasNonOpaque,
+    };
+
+    TextureAlphaContent inspectByteAlpha(std::span<const uint8_t> bytes, size_t alphaOffset, size_t stride)
+    {
+        if (bytes.empty() || stride == 0 || alphaOffset >= stride)
+            return TextureAlphaContent::eUnknown;
+
+        constexpr uint8_t alphaMaskThreshold = 250u;
+        const size_t      pixelCount         = bytes.size() / stride;
+        const size_t      step               = std::max<size_t>(1u, pixelCount / 4096u);
+        for (size_t pixel = 0; pixel < pixelCount; pixel += step)
+        {
+            if (bytes[pixel * stride + alphaOffset] < alphaMaskThreshold)
+                return TextureAlphaContent::eHasNonOpaque;
+        }
+        return TextureAlphaContent::eOpaque;
+    }
+
+    TextureAlphaContent inspectSTBTextureAlpha(const std::filesystem::path& path)
+    {
+        int width = 0, height = 0, channels = 0;
+        stbi_uc* pixels = stbi_load(path.generic_string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (!pixels)
+            return TextureAlphaContent::eUnknown;
+
+        auto freePixels = vbase::ScopeExit([&] { stbi_image_free(pixels); });
+        if (width <= 0 || height <= 0)
+            return TextureAlphaContent::eUnknown;
+
+        const auto byteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+        return inspectByteAlpha(std::span<const uint8_t>(pixels, byteCount), 3u, 4u);
+    }
+
+    TextureAlphaContent inspectBC2Alpha(const ddsktx_sub_data& subData)
+    {
+        if (!subData.buff || subData.size_bytes <= 0)
+            return TextureAlphaContent::eUnknown;
+
+        const auto*  blocks     = static_cast<const uint8_t*>(subData.buff);
+        const size_t blockCount = static_cast<size_t>(subData.size_bytes) / 16u;
+        const size_t step       = std::max<size_t>(1u, blockCount / 4096u);
+        for (size_t blockIndex = 0; blockIndex < blockCount; blockIndex += step)
+        {
+            const uint8_t* block = blocks + blockIndex * 16u;
+            for (uint32_t byteIndex = 0; byteIndex < 8u; ++byteIndex)
+            {
+                const uint8_t packed = block[byteIndex];
+                if ((packed & 0x0fu) < 0x0fu || ((packed >> 4u) & 0x0fu) < 0x0fu)
+                    return TextureAlphaContent::eHasNonOpaque;
+            }
+        }
+        return TextureAlphaContent::eOpaque;
+    }
+
+    TextureAlphaContent inspectBC3Alpha(const ddsktx_sub_data& subData)
+    {
+        if (!subData.buff || subData.size_bytes <= 0)
+            return TextureAlphaContent::eUnknown;
+
+        constexpr uint8_t alphaMaskThreshold = 250u;
+        const auto*       blocks             = static_cast<const uint8_t*>(subData.buff);
+        const size_t      blockCount         = static_cast<size_t>(subData.size_bytes) / 16u;
+        const size_t      step               = std::max<size_t>(1u, blockCount / 4096u);
+        for (size_t blockIndex = 0; blockIndex < blockCount; blockIndex += step)
+        {
+            const auto alphas = decodeBC4Block(blocks + blockIndex * 16u);
+            for (const uint8_t alpha : alphas)
+            {
+                if (alpha < alphaMaskThreshold)
+                    return TextureAlphaContent::eHasNonOpaque;
+            }
+        }
+        return TextureAlphaContent::eOpaque;
+    }
+
+    TextureAlphaContent inspectDDSKTXTextureAlpha(const std::filesystem::path& path)
+    {
+        const auto bytes = readAll(path);
+        if (bytes.empty())
+            return TextureAlphaContent::eUnknown;
+
+        ddsktx_texture_info tc {};
+        if (!ddsktx_parse(&tc, bytes.data(), static_cast<int>(bytes.size()), nullptr))
+            return TextureAlphaContent::eUnknown;
+
+        if ((tc.flags & DDSKTX_TEXTURE_FLAG_ALPHA) == 0 && tc.format != DDSKTX_FORMAT_BC2 &&
+            tc.format != DDSKTX_FORMAT_BC3)
+        {
+            return TextureAlphaContent::eOpaque;
+        }
+
+        ddsktx_sub_data subData {};
+        ddsktx_get_sub(&tc, &subData, bytes.data(), static_cast<int>(bytes.size()), 0, 0, 0);
+        if (!subData.buff || subData.width <= 0 || subData.height <= 0)
+            return TextureAlphaContent::eUnknown;
+
+        if (tc.format == DDSKTX_FORMAT_BC2)
+            return inspectBC2Alpha(subData);
+        if (tc.format == DDSKTX_FORMAT_BC3)
+            return inspectBC3Alpha(subData);
+        if (tc.format == DDSKTX_FORMAT_RGBA8 || tc.format == DDSKTX_FORMAT_BGRA8)
+        {
+            std::vector<uint8_t> alphaSample;
+            alphaSample.reserve(static_cast<size_t>(subData.width) * static_cast<size_t>(subData.height) * 4u);
+            const auto* rows = static_cast<const uint8_t*>(subData.buff);
+            for (int y = 0; y < subData.height; ++y)
+            {
+                const uint8_t* row = rows + static_cast<size_t>(y) * static_cast<size_t>(subData.row_pitch_bytes);
+                alphaSample.insert(alphaSample.end(), row, row + static_cast<size_t>(subData.width) * 4u);
+            }
+            return inspectByteAlpha(alphaSample, 3u, 4u);
+        }
+
+        return TextureAlphaContent::eUnknown;
+    }
+
+    TextureAlphaContent inspectTextureAlpha(const std::filesystem::path& path)
+    {
+        const auto ext = toLowerAscii(path.extension().generic_string());
+        if (isSTB(ext))
+            return inspectSTBTextureAlpha(path);
+        if (isKTXDDS(ext))
+            return inspectDDSKTXTextureAlpha(path);
+        return TextureAlphaContent::eUnknown;
     }
 
     uint64_t hashBytes(const void* data, size_t size, uint64_t seed = 0)
@@ -892,6 +1274,19 @@ namespace
             return baseName;
 
         return baseName + "_" + stableShortHash(relativeSourcePath);
+    }
+
+    std::string shortenImportedAssetKey(std::string key, const size_t maxLength = 160)
+    {
+        if (key.size() <= maxLength)
+            return key;
+
+        const std::string suffix = "_" + stableShortHash(key);
+        const size_t      headLength = maxLength > suffix.size() ? maxLength - suffix.size() : 0u;
+        key.resize(headLength);
+        while (!key.empty() && (key.back() == '_' || key.back() == '-' || key.back() == '.'))
+            key.pop_back();
+        return key + suffix;
     }
 
     vasset::VAssetType inferSourceTextAssetType(const std::filesystem::path& path)
@@ -1575,47 +1970,71 @@ namespace
             {
                 case aiPTI_String: {
                     aiString value;
-                    if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                        entry.value = std::move(value);
+                    if (prop->mData && prop->mDataLength >= sizeof(uint32_t))
+                    {
+                        if (prop->mDataLength >= sizeof(aiString))
+                        {
+                            std::memcpy(&value, prop->mData, sizeof(aiString));
+                            value.length = std::min(value.length, static_cast<ai_uint32>(AI_MAXLEN - 1u));
+                            value.data[value.length] = '\0';
+                            entry.value = value;
+                        }
+                        else
+                        {
+                            uint32_t len = 0;
+                            std::memcpy(&len, prop->mData, sizeof(len));
+                            len = std::min<uint32_t>(len, prop->mDataLength - sizeof(len));
+                            len = std::min<uint32_t>(len, static_cast<uint32_t>(AI_MAXLEN - 1u));
+                            if (len > 0)
+                                std::memcpy(value.data, prop->mData + sizeof(len), len);
+                            value.length     = len;
+                            value.data[len]  = '\0';
+                            entry.value      = value;
+                        }
+                    }
                     break;
                 }
                 case aiPTI_Float: {
-                    if (prop->mDataLength / sizeof(float) == 3)
+                    if (!prop->mData || prop->mDataLength < sizeof(float))
+                        break;
+
+                    const auto floatCount = prop->mDataLength / sizeof(float);
+                    if (floatCount == 3)
                     {
                         aiColor3D value;
-                        if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                            entry.value = std::move(value);
+                        std::memcpy(&value, prop->mData, sizeof(value));
+                        entry.value = value;
                     }
-                    else if (prop->mDataLength / sizeof(float) == 4)
+                    else if (floatCount == 4)
                     {
                         aiColor4D value;
-                        if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                            entry.value = std::move(value);
+                        std::memcpy(&value, prop->mData, sizeof(value));
+                        entry.value = value;
                     }
                     else
                     {
-                        float value;
-                        if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                            entry.value = std::move(value);
+                        float value = 0.0f;
+                        std::memcpy(&value, prop->mData, sizeof(value));
+                        entry.value = value;
                     }
                     break;
                 }
                 case aiPTI_Double: {
-                    double value;
-                    if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                        entry.value = std::move(value);
+                    if (prop->mData && prop->mDataLength >= sizeof(double))
+                    {
+                        double value = 0.0;
+                        std::memcpy(&value, prop->mData, sizeof(value));
+                        entry.value = value;
+                    }
                     break;
                 }
                 case aiPTI_Integer: {
-                    int value;
-                    if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, value) == aiReturn_SUCCESS)
-                        entry.value = std::move(value);
-                    bool bvalue;
-                    if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, bvalue) == aiReturn_SUCCESS)
-                        entry.value = std::move(bvalue);
-                    aiBlendMode bmvalue;
-                    if (material->Get(prop->mKey.C_Str(), prop->mSemantic, prop->mIndex, bmvalue) == aiReturn_SUCCESS)
-                        entry.value = std::move(bmvalue);
+                    if (prop->mData && prop->mDataLength >= sizeof(int))
+                    {
+                        int value = 0;
+                        std::memcpy(&value, prop->mData, sizeof(value));
+                        entry.value = value;
+                    }
                     break;
                 }
                 case aiPTI_Buffer: {
@@ -1647,6 +2066,49 @@ namespace
             {
                 out = *p;
                 return true;
+            }
+
+            if constexpr (std::is_same_v<T, float>)
+            {
+                if (auto p = std::get_if<double>(&it->second.value))
+                {
+                    out = static_cast<float>(*p);
+                    return true;
+                }
+                if (auto p = std::get_if<int>(&it->second.value))
+                {
+                    out = static_cast<float>(*p);
+                    return true;
+                }
+            }
+            else if constexpr (std::is_same_v<T, double>)
+            {
+                if (auto p = std::get_if<float>(&it->second.value))
+                {
+                    out = static_cast<double>(*p);
+                    return true;
+                }
+                if (auto p = std::get_if<int>(&it->second.value))
+                {
+                    out = static_cast<double>(*p);
+                    return true;
+                }
+            }
+            else if constexpr (std::is_same_v<T, bool>)
+            {
+                if (auto p = std::get_if<int>(&it->second.value))
+                {
+                    out = *p != 0;
+                    return true;
+                }
+            }
+            else if constexpr (std::is_same_v<T, aiBlendMode>)
+            {
+                if (auto p = std::get_if<int>(&it->second.value))
+                {
+                    out = static_cast<aiBlendMode>(*p);
+                    return true;
+                }
             }
         }
         return false;
@@ -1734,9 +2196,12 @@ namespace vasset
 
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         const uint64_t sourceHash     = hashFile(osPath);
-        constexpr uint64_t dependencyHash = 0;
+        const bool likelyNormalMap = isLikelyNormalMapPath(osPath);
+        const auto importHintReadme = likelyNormalMap ? findImportHintReadme(osPath) : std::filesystem::path {};
+        const bool inferredDirectXNormalMap = readmeDeclaresDirectXNormal(importHintReadme);
+        const uint64_t dependencyHash = likelyNormalMap && !importHintReadme.empty() ? hashFile(importHintReadme) : 0;
         const uint64_t paramsHash     = textureImportParamsHash(m_Options);
-        constexpr auto importerVersion = "texture:2";
+        constexpr auto importerVersion = "texture:5";
         constexpr auto outputSchema = "vtexture:1";
 
         auto       entry      = m_Registry.lookup(lookupUUID);
@@ -1805,6 +2270,31 @@ namespace vasset
             if (!ddsktx_parse(&tc, fileBytes.data(), static_cast<int>(fileBytes.size()), nullptr))
             {
                 return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+            }
+
+            const bool bakeBC5NormalMap =
+                tc.format == DDSKTX_FORMAT_BC5 && (m_Options.bakeNormalMap || likelyNormalMap);
+            if (bakeBC5NormalMap)
+            {
+                std::vector<uint8_t> bakedPixels;
+                const bool compressBakedNormalWithBasisU =
+                    m_Options.targetTextureFileFormat == VTextureFileFormat::eKTX2;
+                if (!bakeBC5NormalToRGBA8(tc,
+                                          reinterpret_cast<const uint8_t*>(fileBytes.data()),
+                                          fileBytes.size(),
+                                          m_Options.directXNormalMap || inferredDirectXNormalMap,
+                                          bakedPixels) ||
+                    !writeRGBA8ToKTX2(static_cast<uint32_t>(tc.width),
+                                      static_cast<uint32_t>(tc.height),
+                                      bakedPixels,
+                                      m_Options,
+                                      compressBakedNormalWithBasisU,
+                                      outTexture))
+                {
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                }
+
+                goto SUCCESS;
             }
 
             // Fill outTexture
@@ -2314,8 +2804,8 @@ namespace vasset
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "model_prefab:7";
-        constexpr auto outputSchema = "vmanifest:1+vmesh:3+default_transform:1+node_transform:1";
+        constexpr auto importerVersion = "model_prefab:9";
+        constexpr auto outputSchema = "vmanifest:1+vmesh:4+default_transform:1+node_transform:1";
 
         auto entry = m_Registry.lookup(manifestUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -2508,7 +2998,7 @@ namespace vasset
                                         const std::string& nodeName,
                                         const aiMatrix4x4& defaultTransform) -> ImportedNodeMeshPaths {
             VMesh nodeMesh {};
-            const std::string meshKey = baseKey + "_" + sanitizeAssetSegment(meshPathKey);
+            const std::string meshKey = shortenImportedAssetKey(baseKey + "_" + sanitizeAssetSegment(meshPathKey));
             const std::string relativeMeshPath = m_Registry.getImportedAssetPath(VAssetType::eMesh, meshKey, true);
             const std::string relativeMeshSourcePath =
                 relativeSrcPath + "#mesh/" + sanitizeAssetSegment(meshPathKey);
@@ -2525,6 +3015,7 @@ namespace vasset
             if (m_Options.generateMeshlets)
                 generateMeshlets(nodeMesh);
             finalizeMeshVertexFlags(nodeMesh);
+            updateMeshLocalBounds(nodeMesh);
 
             const auto meshDiskPath =
                 (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeMeshPath).generic_string();
@@ -2679,8 +3170,8 @@ namespace vasset
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash     = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "mesh:3";
-        constexpr auto outputSchema = "vmesh:3";
+        constexpr auto importerVersion = "mesh:6";
+        constexpr auto outputSchema = "vmesh:4";
 
         auto entry      = m_Registry.lookup(lookupUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -2746,6 +3237,7 @@ namespace vasset
         }
 
         finalizeMeshVertexFlags(outMesh);
+        updateMeshLocalBounds(outMesh);
         // Note: Joint indices and weights would require additional processing, e.g., from bones
 
         const std::string importedPath =
@@ -2873,8 +3365,11 @@ namespace vasset
             {
                 glm::vec3 tangent   = {mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z};
                 glm::vec3 bitangent = {mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z};
-                VTangent  tangentWithHandness = VTangent(
-                    tangent, glm::dot(glm::cross(outMesh.normals.back(), bitangent), tangent) < 0.0f ? -1.0f : 1.0f);
+                const glm::vec3 normal = glm::normalize(outMesh.normals.back());
+                tangent                = glm::normalize(tangent - normal * glm::dot(normal, tangent));
+                bitangent              = glm::normalize(bitangent);
+                const float handedness = glm::dot(glm::cross(normal, tangent), bitangent) < 0.0f ? -1.0f : 1.0f;
+                VTangent    tangentWithHandness = VTangent(tangent, handedness);
                 outMesh.tangents.push_back(tangentWithHandness);
             }
         }
@@ -3079,11 +3574,58 @@ namespace vasset
         auto hasProp = [&](const char* key, unsigned semantic, unsigned index) {
             return props.find(MatPropKey {key, semantic, index}) != props.end();
         };
+        auto texturePathContains = [&](const aiTextureType type, const std::string_view needle) {
+            for (unsigned i = 0, count = material->GetTextureCount(type); i < count; ++i)
+            {
+                aiString path;
+                if (material->GetTexture(type, i, &path) != aiReturn_SUCCESS)
+                    continue;
+                std::string lower = std::filesystem::path(path.C_Str()).filename().generic_string();
+                std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                if (lower.find(needle) != std::string::npos)
+                    return true;
+            }
+            return false;
+        };
+        auto findTexturePathContaining =
+            [&](const aiTextureType type, const std::string_view needle, std::filesystem::path& outPath) {
+                for (unsigned i = 0, count = material->GetTextureCount(type); i < count; ++i)
+                {
+                    aiString path;
+                    if (material->GetTexture(type, i, &path) != aiReturn_SUCCESS)
+                        continue;
+
+                    std::filesystem::path relativePath(path.C_Str());
+                    std::string           lower = relativePath.filename().generic_string();
+                    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    });
+                    if (lower.find(needle) == std::string::npos)
+                        continue;
+
+                    outPath = (std::filesystem::path(m_FilePath).parent_path() / relativePath).lexically_normal();
+                    return true;
+                }
+                return false;
+            };
+        const bool hasSpecularTexture = material->GetTextureCount(aiTextureType_SPECULAR) > 0;
+        const bool hasOrmSpecularTexture =
+            hasSpecularTexture &&
+            (texturePathContains(aiTextureType_SPECULAR, "specular") ||
+             texturePathContains(aiTextureType_SPECULAR, "orm") ||
+             texturePathContains(aiTextureType_SPECULAR, "occlusionroughnessmetallic"));
+        std::filesystem::path baseColorTexturePath;
+        const bool            hasPackedBaseColorOpacity =
+            hasOrmSpecularTexture &&
+            findTexturePathContaining(aiTextureType_DIFFUSE, "basecolor", baseColorTexturePath) &&
+            inspectTextureAlpha(baseColorTexturePath) == TextureAlphaContent::eHasNonOpaque;
         const bool hasMetallicRoughnessHints =
             hasProp(AI_MATKEY_BASE_COLOR) || hasProp(AI_MATKEY_METALLIC_FACTOR) ||
             hasProp(AI_MATKEY_ROUGHNESS_FACTOR) || material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0 ||
             material->GetTextureCount(aiTextureType_METALNESS) > 0 ||
-            material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0;
+            material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0 || hasOrmSpecularTexture;
 
         // Name
         aiString name;
@@ -3155,7 +3697,7 @@ namespace vasset
 
             outMaterial.core.phong.diffuseTexture  = loadTexture(material, aiTextureType_DIFFUSE);
             outMaterial.core.phong.specularTexture = loadTexture(material, aiTextureType_SPECULAR);
-            outMaterial.core.phong.normalTexture   = loadTexture(material, aiTextureType_NORMALS);
+            outMaterial.core.phong.normalTexture   = loadTexture(material, aiTextureType_NORMALS, 0, false);
             outMaterial.core.phong.opacityTexture  = loadTexture(material, aiTextureType_OPACITY);
             outMaterial.core.phong.emissiveTexture = loadTexture(material, aiTextureType_EMISSIVE);
         }
@@ -3193,6 +3735,11 @@ namespace vasset
             float alphaCutoff = 0.5f;
             if (tryGet(props, AI_MATKEY_GLTF_ALPHACUTOFF, alphaCutoff))
                 outMaterial.core.pbrMR.alphaCutoff = alphaCutoff;
+            if (hasPackedBaseColorOpacity)
+            {
+                outMaterial.core.pbrMR.alphaMode   = VMaterialAlphaMode::eMask;
+                outMaterial.core.pbrMR.alphaCutoff = 0.5f;
+            }
 
             // Blend mode
             aiBlendMode blendMode = aiBlendMode_Default;
@@ -3237,11 +3784,18 @@ namespace vasset
             outMaterial.core.pbrMR.metallicTexture         = loadTexture(material, aiTextureType_METALNESS);
             outMaterial.core.pbrMR.roughnessTexture        = loadTexture(material, aiTextureType_DIFFUSE_ROUGHNESS);
             outMaterial.core.pbrMR.specularTexture         = loadTexture(material, aiTextureType_SPECULAR);
-            outMaterial.core.pbrMR.normalTexture           = loadTexture(material, aiTextureType_NORMALS);
+            outMaterial.core.pbrMR.normalTexture           = loadTexture(material, aiTextureType_NORMALS, 0, hasOrmSpecularTexture);
             outMaterial.core.pbrMR.ambientOcclusionTexture = loadTexture(material, aiTextureType_LIGHTMAP);
             outMaterial.core.pbrMR.emissiveTexture         = loadTexture(material, aiTextureType_EMISSIVE);
             outMaterial.core.pbrMR.metallicRoughnessTexture =
                 loadTexture(material, aiTextureType_GLTF_METALLIC_ROUGHNESS);
+            if (hasOrmSpecularTexture && outMaterial.core.pbrMR.specularTexture.uuid != vbase::UUID {})
+            {
+                // ORCA/SunTemple stores absolute ORM values in the legacy Specular slot.
+                // Do not multiply them by classic specular/shininess factors inferred by Assimp.
+                outMaterial.core.pbrMR.metallicFactor  = 1.0f;
+                outMaterial.core.pbrMR.roughnessFactor = 1.0f;
+            }
         }
 
         if (outMaterial.name.empty())
@@ -3259,6 +3813,14 @@ namespace vasset
 
     VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, aiTextureType type, unsigned index) const
     {
+        return loadTexture(material, type, index, false);
+    }
+
+    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material,
+                                           aiTextureType     type,
+                                           unsigned          index,
+                                           bool              directXNormalMap) const
+    {
         if (!material)
             return {};
 
@@ -3271,11 +3833,28 @@ namespace vasset
                 std::filesystem::path relativePath(str.C_Str());
 
                 std::filesystem::path texPath = (std::filesystem::path(m_FilePath).parent_path() / relativePath).lexically_normal();
-                const auto            texKey  = texPath.generic_string();
+                const bool            normalMap = type == aiTextureType_NORMALS;
+                const auto            texKey    = texPath.generic_string() +
+                                       (normalMap ? (directXNormalMap ? "|normal:dx" : "|normal:gl") : "");
                 if (auto cachedIt = m_ModelTextureCache.find(texKey); cachedIt != m_ModelTextureCache.end())
                     return VTextureRef {cachedIt->second};
 
-                auto tr = m_TextureImporter.importTexture(texKey, texture);
+                vbase::Result<vbase::UUID, AssetError> tr =
+                    vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+                if (normalMap)
+                {
+                    VTextureImporter                normalImporter(m_Registry);
+                    VTextureImporter::ImportOptions options {};
+                    options.generateMipmaps       = false;
+                    options.targetTextureFileFormat = VTextureFileFormat::eKTX2;
+                    options.bakeNormalMap        = true;
+                    options.directXNormalMap     = directXNormalMap;
+                    tr = normalImporter.setOptions(options).importTexture(texPath.generic_string(), texture);
+                }
+                else
+                {
+                    tr = m_TextureImporter.importTexture(texPath.generic_string(), texture);
+                }
                 if (!tr)
                 {
                     std::cerr << "Failed to import texture: " << texPath << std::endl;

@@ -5,9 +5,11 @@
 
 #include <zstd.h>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 
 namespace vasset
 {
@@ -18,6 +20,36 @@ namespace vasset
         uint32_t flags;     // bit0 = compressed
         uint64_t rawSize;   // uncompressed size
     };
+
+    namespace
+    {
+        constexpr uint32_t kMetaHasDefaultTransform = 1u << 0u;
+        constexpr uint32_t kMetaHasLocalBounds      = 1u << 1u;
+
+        bool computeLocalBounds(const std::vector<VPosition>& positions, glm::vec3& outMin, glm::vec3& outMax)
+        {
+            if (positions.empty())
+                return false;
+
+            glm::vec3 minP(std::numeric_limits<float>::infinity());
+            glm::vec3 maxP(-std::numeric_limits<float>::infinity());
+            for (const auto& position : positions)
+            {
+                minP = glm::min(minP, position);
+                maxP = glm::max(maxP, position);
+            }
+
+            if (!std::isfinite(minP.x) || !std::isfinite(minP.y) || !std::isfinite(minP.z) ||
+                !std::isfinite(maxP.x) || !std::isfinite(maxP.y) || !std::isfinite(maxP.z))
+            {
+                return false;
+            }
+
+            outMin = minP;
+            outMax = maxP;
+            return true;
+        }
+    } // namespace
 
     vbase::Result<void, AssetError> saveMesh(const VMesh& mesh, vbase::StringView filePath, int zstdLevel)
     {
@@ -285,11 +317,21 @@ namespace vasset
         // Optional payload metadata. Kept at the tail so older readers can ignore it.
         const char metaMagic[16] = "VMESH_META1\0";
         writeRaw(metaMagic, sizeof(metaMagic));
-        uint32_t metaFlags = mesh.hasDefaultTransform ? 1u : 0u;
+        glm::vec3 localBoundsMin = mesh.localBoundsMin;
+        glm::vec3 localBoundsMax = mesh.localBoundsMax;
+        const bool hasLocalBounds =
+            mesh.hasLocalBounds || computeLocalBounds(mesh.positions, localBoundsMin, localBoundsMax);
+        uint32_t metaFlags = 0u;
+        if (mesh.hasDefaultTransform)
+            metaFlags |= kMetaHasDefaultTransform;
+        if (hasLocalBounds)
+            metaFlags |= kMetaHasLocalBounds;
         writeRaw(&metaFlags, sizeof(metaFlags));
         writeRaw(&mesh.defaultPosition, sizeof(mesh.defaultPosition));
         writeRaw(&mesh.defaultRotation, sizeof(mesh.defaultRotation));
         writeRaw(&mesh.defaultScale, sizeof(mesh.defaultScale));
+        writeRaw(&localBoundsMin, sizeof(localBoundsMin));
+        writeRaw(&localBoundsMax, sizeof(localBoundsMax));
 
         // ------------------------------------------------------------
         // Write file
@@ -692,6 +734,9 @@ namespace vasset
         outMesh.defaultPosition     = glm::vec3 {0.0f};
         outMesh.defaultRotation     = glm::quat {1.0f, 0.0f, 0.0f, 0.0f};
         outMesh.defaultScale        = glm::vec3 {1.0f};
+        outMesh.hasLocalBounds      = false;
+        outMesh.localBoundsMin      = glm::vec3 {0.0f};
+        outMesh.localBoundsMax      = glm::vec3 {0.0f};
 
         if (rawOffset + 16 + sizeof(uint32_t) <= raw.size())
         {
@@ -702,7 +747,7 @@ namespace vasset
                 uint32_t metaFlags = 0;
                 if (readRaw(&metaFlags, sizeof(metaFlags)))
                 {
-                    outMesh.hasDefaultTransform = (metaFlags & 1u) != 0;
+                    outMesh.hasDefaultTransform = (metaFlags & kMetaHasDefaultTransform) != 0;
                     readRaw(&outMesh.defaultPosition, sizeof(outMesh.defaultPosition));
                     readRaw(&outMesh.defaultRotation, sizeof(outMesh.defaultRotation));
                     readRaw(&outMesh.defaultScale, sizeof(outMesh.defaultScale));
@@ -710,6 +755,16 @@ namespace vasset
                         outMesh.defaultRotation = glm::normalize(outMesh.defaultRotation);
                     else
                         outMesh.defaultRotation = glm::quat {1.0f, 0.0f, 0.0f, 0.0f};
+
+                    if ((metaFlags & kMetaHasLocalBounds) != 0u &&
+                        rawOffset + sizeof(outMesh.localBoundsMin) + sizeof(outMesh.localBoundsMax) <= raw.size())
+                    {
+                        if (readRaw(&outMesh.localBoundsMin, sizeof(outMesh.localBoundsMin)) &&
+                            readRaw(&outMesh.localBoundsMax, sizeof(outMesh.localBoundsMax)))
+                        {
+                            outMesh.hasLocalBounds = true;
+                        }
+                    }
                 }
             }
             else
@@ -717,6 +772,10 @@ namespace vasset
                 rawOffset = metaOffset;
             }
         }
+
+        if (!outMesh.hasLocalBounds)
+            outMesh.hasLocalBounds =
+                computeLocalBounds(outMesh.positions, outMesh.localBoundsMin, outMesh.localBoundsMax);
 
         return vbase::Result<void, AssetError>::ok();
     }

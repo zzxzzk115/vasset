@@ -117,6 +117,13 @@ TEST(MeshSerialization, BasicSerialization)
     ASSERT_EQ(loadedMesh.vertexFlags, mesh.vertexFlags);
     ASSERT_EQ(loadedMesh.positions, mesh.positions);
     ASSERT_EQ(loadedMesh.normals, mesh.normals);
+    ASSERT_TRUE(loadedMesh.hasLocalBounds);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMin.x, 0.0f);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMin.y, 0.0f);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMin.z, 0.0f);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMax.x, 1.0f);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMax.y, 1.0f);
+    EXPECT_FLOAT_EQ(loadedMesh.localBoundsMax.z, 0.0f);
     ASSERT_EQ(loadedMesh.indices, mesh.indices);
     ASSERT_EQ(loadedMesh.subMeshes.size(), mesh.subMeshes.size());
     for (size_t i = 0; i < mesh.subMeshes.size(); ++i)

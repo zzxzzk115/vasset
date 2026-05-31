@@ -61,6 +61,11 @@ int main()
             {
                 std::cout << "Loaded mesh: " << meshPath << " (" << mesh.name << ") with " << mesh.vertexCount
                           << " vertices." << std::endl;
+                if (!mesh.hasLocalBounds)
+                {
+                    std::cerr << "Imported mesh is missing local bounds: " << meshPath << std::endl;
+                    return 1;
+                }
 
                 for (const auto& subMesh : mesh.subMeshes)
                 {
