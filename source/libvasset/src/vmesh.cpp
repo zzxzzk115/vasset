@@ -6,6 +6,7 @@
 #include <zstd.h>
 
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -332,6 +333,28 @@ namespace vasset
         writeRaw(&mesh.defaultScale, sizeof(mesh.defaultScale));
         writeRaw(&localBoundsMin, sizeof(localBoundsMin));
         writeRaw(&localBoundsMax, sizeof(localBoundsMax));
+
+        if (mesh.hasSkin)
+        {
+            const char skinMagic[16] = "VMESH_SKIN1\0";
+            writeRaw(skinMagic, sizeof(skinMagic));
+            writeRaw(&mesh.skeleton, sizeof(mesh.skeleton));
+            writeString(mesh.skeletonPath);
+
+            const uint32_t jointCount = static_cast<uint32_t>(mesh.jointNames.size());
+            writeRaw(&jointCount, sizeof(jointCount));
+            for (uint32_t i = 0; i < jointCount; ++i)
+            {
+                writeString(mesh.jointNames[i]);
+                const int16_t parent = i < mesh.jointParents.size() ? mesh.jointParents[i] : -1;
+                writeRaw(&parent, sizeof(parent));
+            }
+
+            const uint32_t inverseBindPoseCount = static_cast<uint32_t>(mesh.inverseBindPoses.size());
+            writeRaw(&inverseBindPoseCount, sizeof(inverseBindPoseCount));
+            for (const auto& inverseBindPose : mesh.inverseBindPoses)
+                writeRaw(&inverseBindPose, sizeof(inverseBindPose));
+        }
 
         // ------------------------------------------------------------
         // Write file
@@ -737,6 +760,12 @@ namespace vasset
         outMesh.hasLocalBounds      = false;
         outMesh.localBoundsMin      = glm::vec3 {0.0f};
         outMesh.localBoundsMax      = glm::vec3 {0.0f};
+        outMesh.hasSkin             = false;
+        outMesh.skeleton            = {};
+        outMesh.skeletonPath.clear();
+        outMesh.jointNames.clear();
+        outMesh.jointParents.clear();
+        outMesh.inverseBindPoses.clear();
 
         if (rawOffset + 16 + sizeof(uint32_t) <= raw.size())
         {
@@ -770,6 +799,56 @@ namespace vasset
             else
             {
                 rawOffset = metaOffset;
+            }
+        }
+
+        if (rawOffset + 16 + sizeof(outMesh.skeleton) <= raw.size())
+        {
+            const size_t skinOffset = rawOffset;
+            char         skinMagic[16] {};
+            auto readStringTail = [&]() -> std::string {
+                uint32_t len = 0;
+                if (!readRaw(&len, sizeof(len)) || rawOffset + len > raw.size())
+                    return {};
+                std::string out;
+                out.resize(len);
+                if (len)
+                    readRaw(out.data(), len);
+                return out;
+            };
+
+            if (readRaw(skinMagic, sizeof(skinMagic)) && std::string(skinMagic) == "VMESH_SKIN1")
+            {
+                outMesh.hasSkin = true;
+                if (!readRaw(&outMesh.skeleton, sizeof(outMesh.skeleton)))
+                    return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+                outMesh.skeletonPath = readStringTail();
+
+                uint32_t jointCount = 0;
+                if (!readRaw(&jointCount, sizeof(jointCount)))
+                    return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+                outMesh.jointNames.resize(jointCount);
+                outMesh.jointParents.resize(jointCount);
+                for (uint32_t i = 0; i < jointCount; ++i)
+                {
+                    outMesh.jointNames[i] = readStringTail();
+                    if (!readRaw(&outMesh.jointParents[i], sizeof(outMesh.jointParents[i])))
+                        return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+                }
+
+                uint32_t inverseBindPoseCount = 0;
+                if (!readRaw(&inverseBindPoseCount, sizeof(inverseBindPoseCount)))
+                    return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+                outMesh.inverseBindPoses.resize(inverseBindPoseCount);
+                for (auto& inverseBindPose : outMesh.inverseBindPoses)
+                {
+                    if (!readRaw(&inverseBindPose, sizeof(inverseBindPose)))
+                        return vbase::Result<void, AssetError>::err(AssetError::eIOError);
+                }
+            }
+            else
+            {
+                rawOffset = skinOffset;
             }
         }
 

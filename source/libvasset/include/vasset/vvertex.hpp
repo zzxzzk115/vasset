@@ -46,7 +46,7 @@ namespace vasset
     using VColor        = glm::vec3;
     using VTexCoord     = glm::vec2;
     using VTangent      = glm::vec4; // packed tangent
-    using VJointIndices = glm::vec4;
+    using VJointIndices = glm::ivec4;
     using VJointWeights = glm::vec4;
 
     // Vertex structure used in meshes
@@ -58,12 +58,12 @@ namespace vasset
         glm::vec2 texCoord0;
         glm::vec2 texCoord1;
         glm::vec4 tangent; // packed tangent
-        glm::vec4 jointIndices;
+        glm::ivec4 jointIndices;
         glm::vec4 jointWeights;
 
         VVertex() :
             position(0.0f), normal(0.0f), color(1.0f), texCoord0(0.0f), texCoord1(0.0f), tangent(0.0f),
-            jointIndices(0.0f), jointWeights(0.0f)
+            jointIndices(0), jointWeights(0.0f)
         {}
     };
 } // namespace vasset

@@ -89,6 +89,13 @@ namespace vasset
         glm::vec3 localBoundsMin {0.0f};
         glm::vec3 localBoundsMax {0.0f};
 
+        bool                    hasSkin {false};
+        vbase::UUID             skeleton;
+        std::string             skeletonPath;
+        std::vector<std::string> jointNames;
+        std::vector<int16_t>     jointParents;
+        std::vector<glm::mat4>   inverseBindPoses;
+
         std::string sourceFileName; // Not serialized
     };
 

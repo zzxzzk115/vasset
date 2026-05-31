@@ -12,6 +12,8 @@ namespace vasset
         eTexture,
         eMaterial,
         eMesh,
+        eSkeleton,
+        eAnimation,
         eGaussianSplat,
         eScene,
         eSceneManifest,
@@ -33,6 +35,10 @@ namespace vasset
                 return "material";
             case VAssetType::eMesh:
                 return "mesh";
+            case VAssetType::eSkeleton:
+                return "skeleton";
+            case VAssetType::eAnimation:
+                return "animation";
             case VAssetType::eGaussianSplat:
                 return "gaussian_splat";
             case VAssetType::eScene:
@@ -70,6 +76,14 @@ namespace vasset
         else if (typeStr == "mesh")
         {
             return VAssetType::eMesh;
+        }
+        else if (typeStr == "skeleton")
+        {
+            return VAssetType::eSkeleton;
+        }
+        else if (typeStr == "animation")
+        {
+            return VAssetType::eAnimation;
         }
         else if (typeStr == "gaussian_splat")
         {

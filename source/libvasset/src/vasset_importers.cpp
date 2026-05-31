@@ -2,6 +2,7 @@
 #include "vasset/vasset_import_database.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
+#include "vasset/vanimation.hpp"
 #include "vasset/vgaussiansplat.hpp"
 #include "vasset/vimport.hpp"
 
@@ -32,6 +33,7 @@
 
 #include <assimp/GltfMaterial.h>
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
@@ -39,8 +41,19 @@
 #include <gf/io/registry.h>
 
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <meshoptimizer.h>
+
+#include <ozz/animation/offline/animation_builder.h>
+#include <ozz/animation/offline/raw_animation.h>
+#include <ozz/animation/offline/raw_skeleton.h>
+#include <ozz/animation/offline/skeleton_builder.h>
+#include <ozz/animation/runtime/animation.h>
+#include <ozz/animation/runtime/skeleton.h>
+#include <ozz/animation/runtime/skeleton_utils.h>
+#include <ozz/base/io/archive.h>
+#include <ozz/base/io/stream.h>
 
 #include <algorithm>
 #include <array>
@@ -55,8 +68,10 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <numeric>
+#include <ranges>
 #include <regex>
 #include <sstream>
 #include <cstdlib>
@@ -136,6 +151,26 @@ namespace
             return static_cast<char>(std::tolower(c));
         });
         return value;
+    }
+
+    bool isFbxSource(const std::filesystem::path& sourcePath)
+    {
+        return toLowerAscii(sourcePath.extension().generic_string()) == ".fbx";
+    }
+
+    void configureAssimpImporterForSource(Assimp::Importer& importer, const std::filesystem::path& sourcePath)
+    {
+        if (isFbxSource(sourcePath))
+        {
+            importer.SetPropertyBool(AI_CONFIG_FBX_CONVERT_TO_M, true);
+        }
+    }
+
+    unsigned int assimpImportFlagsForSource(unsigned int flags, const std::filesystem::path& sourcePath)
+    {
+        if (isFbxSource(sourcePath))
+            flags |= aiProcess_GlobalScale;
+        return flags;
     }
 
     bool isLikelyNormalMapPath(const std::filesystem::path& path)
@@ -218,6 +253,409 @@ namespace
     bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
 
     bool isValidSceneManifest(vbase::StringView ext) { return ext == ".vmanifest"; }
+
+    class OzzMemoryStream final : public ozz::io::Stream
+    {
+    public:
+        bool opened() const override { return true; }
+
+        size_t Read(void* buffer, size_t size) override
+        {
+            const size_t available = m_Bytes.size() > m_Offset ? m_Bytes.size() - m_Offset : 0u;
+            const size_t count     = std::min(size, available);
+            if (count != 0u)
+            {
+                std::memcpy(buffer, m_Bytes.data() + m_Offset, count);
+                m_Offset += count;
+            }
+            return count;
+        }
+
+        size_t Write(const void* buffer, size_t size) override
+        {
+            if (m_Offset + size > m_Bytes.size())
+                m_Bytes.resize(m_Offset + size);
+            std::memcpy(m_Bytes.data() + m_Offset, buffer, size);
+            m_Offset += size;
+            return size;
+        }
+
+        int Seek(int offset, Origin origin) override
+        {
+            size_t base = 0;
+            if (origin == kCurrent)
+                base = m_Offset;
+            else if (origin == kEnd)
+                base = m_Bytes.size();
+
+            const auto next = static_cast<int64_t>(base) + static_cast<int64_t>(offset);
+            if (next < 0)
+                return -1;
+            m_Offset = static_cast<size_t>(next);
+            if (m_Offset > m_Bytes.size())
+                m_Bytes.resize(m_Offset);
+            return 0;
+        }
+
+        int Tell() const override { return static_cast<int>(m_Offset); }
+        size_t Size() const override { return m_Bytes.size(); }
+
+        std::vector<std::byte> bytes() const
+        {
+            std::vector<std::byte> out(m_Bytes.size());
+            if (!m_Bytes.empty())
+                std::memcpy(out.data(), m_Bytes.data(), m_Bytes.size());
+            return out;
+        }
+
+    private:
+        std::vector<uint8_t> m_Bytes;
+        size_t               m_Offset {0};
+    };
+
+    ozz::math::Float3 toOzz(const aiVector3D& value) { return {value.x, value.y, value.z}; }
+
+    ozz::math::Quaternion toOzz(const aiQuaternion& value) { return {value.x, value.y, value.z, value.w}; }
+
+    ozz::math::Transform toOzz(const aiMatrix4x4& matrix)
+    {
+        aiVector3D   scaling(1.0f, 1.0f, 1.0f);
+        aiQuaternion rotation;
+        aiVector3D   translation(0.0f, 0.0f, 0.0f);
+        matrix.Decompose(scaling, rotation, translation);
+        return ozz::math::Transform {
+            .translation = toOzz(translation),
+            .rotation    = toOzz(rotation),
+            .scale       = toOzz(scaling),
+        };
+    }
+
+    glm::mat4 toGlm(const aiMatrix4x4& matrix)
+    {
+        return glm::transpose(glm::make_mat4(&matrix.a1));
+    }
+
+    std::unordered_set<std::string> collectBoneNames(const aiScene* scene)
+    {
+        std::unordered_set<std::string> bones;
+        if (!scene)
+            return bones;
+        for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+        {
+            const aiMesh* mesh = scene->mMeshes[meshIndex];
+            if (!mesh)
+                continue;
+            for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+            {
+                if (const aiBone* bone = mesh->mBones[boneIndex])
+                    bones.insert(bone->mName.C_Str());
+            }
+        }
+        return bones;
+    }
+
+    bool nodeHasBoneDescendant(const aiNode* node, const std::unordered_set<std::string>& bones)
+    {
+        if (!node)
+            return false;
+        if (bones.contains(node->mName.C_Str()))
+            return true;
+        for (unsigned int i = 0; i < node->mNumChildren; ++i)
+        {
+            if (nodeHasBoneDescendant(node->mChildren[i], bones))
+                return true;
+        }
+        return false;
+    }
+
+    const aiNode* findSkeletonRoot(const aiScene* scene, const std::unordered_set<std::string>& bones)
+    {
+        if (!scene || !scene->mRootNode || bones.empty())
+            return nullptr;
+
+        const aiNode* root = scene->mRootNode;
+        for (;;)
+        {
+            const aiNode* onlyChildWithBones = nullptr;
+            uint32_t      childrenWithBones  = 0;
+            for (unsigned int i = 0; i < root->mNumChildren; ++i)
+            {
+                if (nodeHasBoneDescendant(root->mChildren[i], bones))
+                {
+                    onlyChildWithBones = root->mChildren[i];
+                    ++childrenWithBones;
+                }
+            }
+
+            if (childrenWithBones != 1u)
+                break;
+            root = onlyChildWithBones;
+        }
+
+        return nodeHasBoneDescendant(root, bones) ? root : nullptr;
+    }
+
+    void appendRawSkeletonJoint(const aiNode* node, ozz::animation::offline::RawSkeleton::Joint& joint)
+    {
+        joint.name      = node->mName.C_Str();
+        joint.transform = toOzz(node->mTransformation);
+        joint.children.resize(node->mNumChildren);
+        for (unsigned int i = 0; i < node->mNumChildren; ++i)
+            appendRawSkeletonJoint(node->mChildren[i], joint.children[i]);
+    }
+
+    std::vector<std::byte> serializeOzzSkeleton(const ozz::animation::Skeleton& skeleton)
+    {
+        OzzMemoryStream stream;
+        ozz::io::OArchive archive(&stream);
+        archive << skeleton;
+        return stream.bytes();
+    }
+
+    std::vector<std::byte> serializeOzzAnimation(const ozz::animation::Animation& animation)
+    {
+        OzzMemoryStream stream;
+        ozz::io::OArchive archive(&stream);
+        archive << animation;
+        return stream.bytes();
+    }
+
+    struct ImportedSkeletonData
+    {
+        vasset::VSkeleton skeleton;
+        std::unordered_map<std::string, uint32_t> jointIndexByName;
+    };
+
+    vbase::Result<ImportedSkeletonData, vasset::AssetError> buildImportedSkeleton(const aiScene* scene,
+                                                                                  const vbase::UUID& uuid,
+                                                                                  const std::string& name)
+    {
+        const auto boneNames = collectBoneNames(scene);
+        const aiNode* rootBone = findSkeletonRoot(scene, boneNames);
+        if (!rootBone)
+            return vbase::Result<ImportedSkeletonData, vasset::AssetError>::err(vasset::AssetError::eInvalidFormat);
+
+        ozz::animation::offline::RawSkeleton rawSkeleton;
+        rawSkeleton.roots.resize(1);
+        appendRawSkeletonJoint(rootBone, rawSkeleton.roots[0]);
+        if (!rawSkeleton.Validate())
+            return vbase::Result<ImportedSkeletonData, vasset::AssetError>::err(vasset::AssetError::eInvalidFormat);
+
+        ozz::animation::offline::SkeletonBuilder builder;
+        auto runtimeSkeleton = builder(rawSkeleton);
+        if (!runtimeSkeleton)
+            return vbase::Result<ImportedSkeletonData, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+
+        ImportedSkeletonData out;
+        out.skeleton.uuid      = uuid;
+        out.skeleton.name      = name;
+        out.skeleton.ozzData   = serializeOzzSkeleton(*runtimeSkeleton);
+
+        const auto jointNames = runtimeSkeleton->joint_names();
+        const auto parents    = runtimeSkeleton->joint_parents();
+        out.skeleton.jointNames.reserve(jointNames.size());
+        out.skeleton.jointParents.reserve(parents.size());
+        for (int i = 0; i < runtimeSkeleton->num_joints(); ++i)
+        {
+            const std::string jointName = jointNames[i];
+            out.jointIndexByName.emplace(jointName, static_cast<uint32_t>(i));
+            out.skeleton.jointNames.push_back(jointName);
+            out.skeleton.jointParents.push_back(parents[i]);
+        }
+        return vbase::Result<ImportedSkeletonData, vasset::AssetError>::ok(std::move(out));
+    }
+
+    bool applySkinningData(const aiMesh*                                           mesh,
+                           const ImportedSkeletonData&                             skeleton,
+                           vasset::VMesh&                                         outMesh,
+                           const std::unordered_map<std::string, glm::mat4>&       inverseBindPoseByName)
+    {
+        if (!mesh || !mesh->HasBones())
+            return false;
+
+        outMesh.hasSkin = true;
+        outMesh.jointNames = skeleton.skeleton.jointNames;
+        outMesh.jointParents = skeleton.skeleton.jointParents;
+        outMesh.inverseBindPoses.assign(outMesh.jointNames.size(), glm::mat4(1.0f));
+        for (size_t i = 0; i < outMesh.jointNames.size(); ++i)
+        {
+            if (const auto it = inverseBindPoseByName.find(outMesh.jointNames[i]); it != inverseBindPoseByName.end())
+                outMesh.inverseBindPoses[i] = it->second;
+        }
+
+        outMesh.jointIndices.resize(outMesh.vertexCount, glm::ivec4(0));
+        outMesh.jointWeights.resize(outMesh.vertexCount, glm::vec4(0.0f));
+
+        struct Influence
+        {
+            uint32_t joint {0};
+            float    weight {0.0f};
+        };
+        std::vector<std::vector<Influence>> influences(mesh->mNumVertices);
+        for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+        {
+            const aiBone* bone = mesh->mBones[boneIndex];
+            if (!bone)
+                continue;
+
+            const auto jointIt = skeleton.jointIndexByName.find(bone->mName.C_Str());
+            if (jointIt == skeleton.jointIndexByName.end())
+            {
+                std::cerr << "[vasset] skinned mesh references bone outside imported skeleton: "
+                          << bone->mName.C_Str() << std::endl;
+                return false;
+            }
+
+            for (unsigned int weightIndex = 0; weightIndex < bone->mNumWeights; ++weightIndex)
+            {
+                const aiVertexWeight& weight = bone->mWeights[weightIndex];
+                if (weight.mVertexId >= mesh->mNumVertices || weight.mWeight <= 0.0f)
+                    continue;
+                influences[weight.mVertexId].push_back(Influence {
+                    .joint  = jointIt->second,
+                    .weight = weight.mWeight,
+                });
+            }
+        }
+
+        const uint32_t vertexOffset = outMesh.vertexCount - mesh->mNumVertices;
+        for (uint32_t vertex = 0; vertex < mesh->mNumVertices; ++vertex)
+        {
+            auto& vertexInfluences = influences[vertex];
+            std::ranges::sort(vertexInfluences, [](const Influence& a, const Influence& b) {
+                return a.weight > b.weight;
+            });
+            if (vertexInfluences.size() > 4)
+                vertexInfluences.resize(4);
+
+            float totalWeight = 0.0f;
+            for (const auto& influence : vertexInfluences)
+                totalWeight += influence.weight;
+            if (totalWeight <= 0.0f)
+            {
+                outMesh.jointIndices[vertexOffset + vertex] = glm::ivec4(0);
+                outMesh.jointWeights[vertexOffset + vertex] = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                continue;
+            }
+
+            glm::ivec4 joints(0);
+            glm::vec4  weights(0.0f);
+            for (size_t i = 0; i < vertexInfluences.size(); ++i)
+            {
+                joints[static_cast<int>(i)] = static_cast<int>(vertexInfluences[i].joint);
+                weights[static_cast<int>(i)] = vertexInfluences[i].weight / totalWeight;
+            }
+            outMesh.jointIndices[vertexOffset + vertex] = joints;
+            outMesh.jointWeights[vertexOffset + vertex] = weights;
+        }
+        return true;
+    }
+
+    std::unordered_map<std::string, glm::mat4> collectInverseBindPoses(const aiScene* scene)
+    {
+        std::unordered_map<std::string, glm::mat4> out;
+        if (!scene)
+            return out;
+        for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+        {
+            const aiMesh* mesh = scene->mMeshes[meshIndex];
+            if (!mesh)
+                continue;
+            for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+            {
+                if (const aiBone* bone = mesh->mBones[boneIndex])
+                    out.emplace(bone->mName.C_Str(), toGlm(bone->mOffsetMatrix));
+            }
+        }
+        return out;
+    }
+
+    vbase::Result<std::vector<vasset::VAnimation>, vasset::AssetError> buildImportedAnimations(
+        const aiScene* scene,
+        const ImportedSkeletonData& skeleton,
+        const std::string& sourceStem,
+        const std::function<vbase::UUID(size_t, std::string_view)>& uuidForAnimation)
+    {
+        std::vector<vasset::VAnimation> out;
+        if (!scene || scene->mNumAnimations == 0u)
+            return vbase::Result<std::vector<vasset::VAnimation>, vasset::AssetError>::ok(std::move(out));
+
+        ozz::animation::offline::AnimationBuilder builder;
+        out.reserve(scene->mNumAnimations);
+        for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
+        {
+            const aiAnimation* animation = scene->mAnimations[animationIndex];
+            if (!animation)
+                continue;
+
+            const double ticksPerSecond = animation->mTicksPerSecond != 0.0 ? animation->mTicksPerSecond : 25.0;
+            ozz::animation::offline::RawAnimation rawAnimation;
+            rawAnimation.name = animation->mName.length > 0 ? animation->mName.C_Str()
+                                                            : std::format("{}_{}", sourceStem, animationIndex);
+            rawAnimation.duration = static_cast<float>(animation->mDuration / ticksPerSecond);
+            rawAnimation.tracks.resize(skeleton.skeleton.jointNames.size());
+
+            for (unsigned int channelIndex = 0; channelIndex < animation->mNumChannels; ++channelIndex)
+            {
+                const aiNodeAnim* channel = animation->mChannels[channelIndex];
+                if (!channel)
+                    continue;
+
+                const auto jointIt = skeleton.jointIndexByName.find(channel->mNodeName.C_Str());
+                if (jointIt == skeleton.jointIndexByName.end())
+                    continue;
+
+                auto& track = rawAnimation.tracks[jointIt->second];
+                track.translations.reserve(channel->mNumPositionKeys);
+                for (unsigned int keyIndex = 0; keyIndex < channel->mNumPositionKeys; ++keyIndex)
+                {
+                    const auto& key = channel->mPositionKeys[keyIndex];
+                    track.translations.push_back({
+                        .time  = static_cast<float>(key.mTime / ticksPerSecond),
+                        .value = toOzz(key.mValue),
+                    });
+                }
+
+                track.rotations.reserve(channel->mNumRotationKeys);
+                for (unsigned int keyIndex = 0; keyIndex < channel->mNumRotationKeys; ++keyIndex)
+                {
+                    const auto& key = channel->mRotationKeys[keyIndex];
+                    track.rotations.push_back({
+                        .time  = static_cast<float>(key.mTime / ticksPerSecond),
+                        .value = toOzz(key.mValue),
+                    });
+                }
+
+                track.scales.reserve(channel->mNumScalingKeys);
+                for (unsigned int keyIndex = 0; keyIndex < channel->mNumScalingKeys; ++keyIndex)
+                {
+                    const auto& key = channel->mScalingKeys[keyIndex];
+                    track.scales.push_back({
+                        .time  = static_cast<float>(key.mTime / ticksPerSecond),
+                        .value = toOzz(key.mValue),
+                    });
+                }
+            }
+
+            if (!rawAnimation.Validate())
+                return vbase::Result<std::vector<vasset::VAnimation>, vasset::AssetError>::err(
+                    vasset::AssetError::eInvalidFormat);
+
+            auto runtimeAnimation = builder(rawAnimation);
+            if (!runtimeAnimation)
+                return vbase::Result<std::vector<vasset::VAnimation>, vasset::AssetError>::err(
+                    vasset::AssetError::eImportFailed);
+
+            vasset::VAnimation imported;
+            imported.name     = rawAnimation.name;
+            imported.uuid     = uuidForAnimation(animationIndex, imported.name);
+            imported.duration = runtimeAnimation->duration();
+            imported.ozzData  = serializeOzzAnimation(*runtimeAnimation);
+            out.push_back(std::move(imported));
+        }
+
+        return vbase::Result<std::vector<vasset::VAnimation>, vasset::AssetError>::ok(std::move(out));
+    }
 
     bool isValidScriptLua(vbase::StringView ext) { return ext == ".lua"; }
 
@@ -373,12 +811,6 @@ namespace
                record->dependencyHash == dependencyHash && record->paramsHash == paramsHash;
     }
 
-    bool importDatabaseHasRecord(const vasset::VAssetRegistry& registry, const std::string& source)
-    {
-        const auto db = loadImportDatabase(registry);
-        return db.findBySource(source) != nullptr;
-    }
-
     vbase::Result<void, vasset::AssetError> updateImportDatabaseRecord(const vasset::VAssetRegistry& registry,
                                                                        const vbase::UUID&            uid,
                                                                        const std::string&            importer,
@@ -482,6 +914,10 @@ namespace
             mesh.vertexFlags |= vasset::VVertexFlags::eTexCoord1;
         if (mesh.tangents.size() == mesh.vertexCount)
             mesh.vertexFlags |= vasset::VVertexFlags::eTangent;
+        if (mesh.jointIndices.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eJointIndices;
+        if (mesh.jointWeights.size() == mesh.vertexCount)
+            mesh.vertexFlags |= vasset::VVertexFlags::eJointWeights;
     }
 
     void updateMeshLocalBounds(vasset::VMesh& mesh)
@@ -1777,8 +2213,7 @@ namespace
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeImportedPath, relativeWebGpuPath}) ||
-                !importDatabaseHasRecord(registry, relativeSrcPath))
+                                              {relativeImportedPath, relativeWebGpuPath}))
             {
                 (void)updateImportDatabaseRecord(registry,
                                                  lookupUUID,
@@ -1870,8 +2305,7 @@ namespace
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeImportedPath}) ||
-                !importDatabaseHasRecord(registry, relativeSrcPath))
+                                              {relativeImportedPath}))
             {
                 (void)updateImportDatabaseRecord(registry,
                                                  lookupUUID,
@@ -2218,8 +2652,7 @@ namespace vasset
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeImportedPath}) ||
-                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+                                              {relativeImportedPath}))
             {
                 (void)updateImportDatabaseRecord(m_Registry,
                                                  lookupUUID,
@@ -2804,8 +3237,8 @@ namespace vasset
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "model_prefab:9";
-        constexpr auto outputSchema = "vmanifest:1+vmesh:4+default_transform:1+node_transform:1";
+        constexpr auto importerVersion = "model_prefab:1";
+        constexpr auto outputSchema = "vmanifest:1+vmesh:5+vskel:1+vanim:1+default_transform:1+node_transform:1";
 
         auto entry = m_Registry.lookup(manifestUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -2821,8 +3254,7 @@ namespace vasset
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeManifestPath}) ||
-                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+                                              {relativeManifestPath}))
             {
                 (void)updateImportDatabaseRecord(m_Registry,
                                                  manifestUUID,
@@ -2841,13 +3273,58 @@ namespace vasset
 
         m_FilePath = filePath;
 
-        const unsigned int flags = aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace |
-                                   aiProcess_GenSmoothNormals | aiProcess_GenUVCoords;
+        const unsigned int flags = assimpImportFlagsForSource(aiProcess_Triangulate | aiProcess_FlipUVs |
+                                                                  aiProcess_CalcTangentSpace |
+                                                                  aiProcess_GenSmoothNormals | aiProcess_GenUVCoords,
+                                                              osPath);
 
         Assimp::Importer importer {};
+        configureAssimpImporterForSource(importer, osPath);
         const aiScene* scene = importer.ReadFile(filePath.data(), flags);
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
             return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        std::optional<ImportedSkeletonData> importedSkeleton;
+        std::vector<VAnimation>             importedAnimations;
+        std::string                         relativeSkeletonPath;
+        std::string                         relativeSkeletonSourcePath;
+        const auto inverseBindPoseByName = collectInverseBindPoses(scene);
+        if (!inverseBindPoseByName.empty())
+        {
+            const std::string skeletonKey = shortenImportedAssetKey(baseKey + "_skeleton");
+            relativeSkeletonPath = m_Registry.getImportedAssetPath(VAssetType::eSkeleton, skeletonKey, true);
+            relativeSkeletonSourcePath = relativeSrcPath + "#skeleton";
+            auto skeletonResult = buildImportedSkeleton(scene,
+                                                        vbase::uuid_from_string_key(relativeSkeletonPath),
+                                                        osPath.stem().generic_string());
+            if (!skeletonResult)
+            {
+                std::cerr << "[vasset] failed skeleton: " << relativeSrcPath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::err(skeletonResult.error());
+            }
+            importedSkeleton = std::move(skeletonResult.value());
+            importedSkeleton->skeleton.sourceFileName = osPath.filename().generic_string();
+
+            auto animationsResult = buildImportedAnimations(
+                scene,
+                *importedSkeleton,
+                osPath.stem().generic_string(),
+                [&](const size_t animationIndex, const std::string_view animationName) {
+                    const std::string animationKey = shortenImportedAssetKey(
+                        baseKey + "_anim_" + std::to_string(animationIndex) + "_" +
+                        sanitizeAssetSegment(std::string(animationName)));
+                    return vbase::uuid_from_string_key(
+                        m_Registry.getImportedAssetPath(VAssetType::eAnimation, animationKey, true));
+                });
+            if (!animationsResult)
+            {
+                std::cerr << "[vasset] failed animation: " << relativeSrcPath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::err(animationsResult.error());
+            }
+            importedAnimations = std::move(animationsResult.value());
+            for (auto& animation : importedAnimations)
+                animation.sourceFileName = osPath.filename().generic_string();
+        }
 
         m_ModelTextureCache.clear();
         m_ModelProgressProcessed = 0;
@@ -2879,7 +3356,8 @@ namespace vasset
                 }
             }
         }
-        m_ModelProgressTotal = referencedTextures.size() + scene->mNumMeshes + 1;
+        m_ModelProgressTotal =
+            referencedTextures.size() + scene->mNumMeshes + 1 + (importedSkeleton ? 1u : 0u) + importedAnimations.size();
         notifyProgress(relativeSrcPath, m_ModelProgressProcessed, m_ModelProgressTotal);
 
         {
@@ -2888,7 +3366,14 @@ namespace vasset
             std::vector<vbase::UUID> staleMeshEntries;
             for (const auto& [uuidStr, registryEntry] : m_Registry.getRegistry())
             {
-                if (registryEntry.type != VAssetType::eMesh || !registryEntry.importedPath.starts_with(cookedMeshPrefix))
+                const bool staleGeneratedMesh =
+                    registryEntry.type == VAssetType::eMesh && registryEntry.importedPath.starts_with(cookedMeshPrefix);
+                const bool staleGeneratedSkeleton =
+                    registryEntry.type == VAssetType::eSkeleton && registryEntry.sourcePath == relativeSkeletonSourcePath;
+                const bool staleGeneratedAnimation =
+                    registryEntry.type == VAssetType::eAnimation &&
+                    registryEntry.sourcePath.starts_with(relativeSrcPath + "#animation/");
+                if (!staleGeneratedMesh && !staleGeneratedSkeleton && !staleGeneratedAnimation)
                     continue;
 
                 vbase::UUID uuid {};
@@ -2898,6 +3383,67 @@ namespace vasset
 
             for (const auto& uuid : staleMeshEntries)
                 (void)m_Registry.unregisterAsset(uuid);
+        }
+
+        if (importedSkeleton)
+        {
+            const auto skeletonDiskPath =
+                (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeSkeletonPath).generic_string();
+            auto sr = saveSkeleton(importedSkeleton->skeleton, skeletonDiskPath);
+            if (!sr)
+                return vbase::Result<vbase::UUID, AssetError>::err(sr.error());
+            auto rr = m_Registry.registerAsset(
+                importedSkeleton->skeleton.uuid, relativeSkeletonSourcePath, relativeSkeletonPath, VAssetType::eSkeleton);
+            if (!rr)
+                return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+            auto dr = updateImportDatabaseRecord(m_Registry,
+                                                 importedSkeleton->skeleton.uuid,
+                                                 toString(VAssetType::eSkeleton),
+                                                 relativeSkeletonSourcePath,
+                                                 relativeSkeletonPath,
+                                                 "skeleton:1",
+                                                 "vskel:1",
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+            if (!dr)
+                return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
+            ++m_ModelProgressProcessed;
+            notifyProgress(relativeSkeletonSourcePath, m_ModelProgressProcessed, m_ModelProgressTotal);
+
+            for (size_t animationIndex = 0; animationIndex < importedAnimations.size(); ++animationIndex)
+            {
+                auto& animation = importedAnimations[animationIndex];
+                const std::string animationKey = shortenImportedAssetKey(
+                    baseKey + "_anim_" + std::to_string(animationIndex) + "_" + sanitizeAssetSegment(animation.name));
+                const std::string relativeAnimationPath =
+                    m_Registry.getImportedAssetPath(VAssetType::eAnimation, animationKey, true);
+                const std::string relativeAnimationSourcePath =
+                    relativeSrcPath + "#animation/" + sanitizeAssetSegment(animation.name);
+                const auto animationDiskPath =
+                    (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeAnimationPath).generic_string();
+                auto ar = saveAnimation(animation, animationDiskPath);
+                if (!ar)
+                    return vbase::Result<vbase::UUID, AssetError>::err(ar.error());
+                auto arr =
+                    m_Registry.registerAsset(animation.uuid, relativeAnimationSourcePath, relativeAnimationPath, VAssetType::eAnimation);
+                if (!arr)
+                    return vbase::Result<vbase::UUID, AssetError>::err(arr.error());
+                auto adr = updateImportDatabaseRecord(m_Registry,
+                                                      animation.uuid,
+                                                      toString(VAssetType::eAnimation),
+                                                      relativeAnimationSourcePath,
+                                                      relativeAnimationPath,
+                                                      "animation:1",
+                                                      "vanim:1",
+                                                      sourceHash,
+                                                      dependencyHash,
+                                                      paramsHash);
+                if (!adr)
+                    return vbase::Result<vbase::UUID, AssetError>::err(adr.error());
+                ++m_ModelProgressProcessed;
+                notifyProgress(relativeAnimationSourcePath, m_ModelProgressProcessed, m_ModelProgressTotal);
+            }
         }
 
         std::ostringstream manifest;
@@ -3007,6 +3553,13 @@ namespace vasset
             nodeMesh.sourceFileName = osPath.filename().generic_string();
 
             processMesh(aiMesh, scene, nodeMesh);
+            if (importedSkeleton && aiMesh->HasBones())
+            {
+                nodeMesh.skeleton     = importedSkeleton->skeleton.uuid;
+                nodeMesh.skeletonPath = relativeSkeletonSourcePath;
+                if (!applySkinningData(aiMesh, *importedSkeleton, nodeMesh, inverseBindPoseByName))
+                    throw AssetError::eInvalidFormat;
+            }
             const glm::vec3 localPivot = recenterMeshAroundBoundsCenter(nodeMesh);
             const auto      nodeTransform =
                 decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
@@ -3170,8 +3723,8 @@ namespace vasset
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
         const uint64_t paramsHash     = meshImportParamsHash(m_Options);
-        constexpr auto importerVersion = "mesh:6";
-        constexpr auto outputSchema = "vmesh:4";
+        constexpr auto importerVersion = "mesh:1";
+        constexpr auto outputSchema = "vmesh:5";
 
         auto entry      = m_Registry.lookup(lookupUUID);
         if (entry.type != VAssetType::eUnknown && !forceReimport &&
@@ -3187,8 +3740,7 @@ namespace vasset
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeImportedPath}) ||
-                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+                                              {relativeImportedPath}))
             {
                 (void)updateImportDatabaseRecord(m_Registry,
                                                  lookupUUID,
@@ -3213,10 +3765,14 @@ namespace vasset
 
         // Set Assimp process flags
         // Ignore scene graph, as we flatten everything into a single VMesh
-        unsigned int flags = aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_PreTransformVertices |
-                             aiProcess_CalcTangentSpace | aiProcess_GenSmoothNormals | aiProcess_GenUVCoords;
+        unsigned int flags = assimpImportFlagsForSource(aiProcess_Triangulate | aiProcess_FlipUVs |
+                                                            aiProcess_PreTransformVertices |
+                                                            aiProcess_CalcTangentSpace |
+                                                            aiProcess_GenSmoothNormals | aiProcess_GenUVCoords,
+                                                        osPath);
 
         Assimp::Importer importer {};
+        configureAssimpImporterForSource(importer, osPath);
         const aiScene*   scene = importer.ReadFile(filePath.data(), flags);
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode || !scene->HasMeshes())
@@ -3405,7 +3961,7 @@ namespace vasset
             }
 
             VMaterial vMat {};
-            processMaterial(aiMat, vMat);
+            processMaterial(aiMat, scene, vMat);
             if (vMat.name.empty())
                 vMat.name = materialName;
             outMesh.materials.push_back(vMat);
@@ -3421,7 +3977,7 @@ namespace vasset
         outMesh.vertexCount += mesh->mNumVertices;
     }
 
-    void VMeshImporter::processMaterial(const aiMaterial* material, VMaterial& outMaterial) const
+    void VMeshImporter::processMaterial(const aiMaterial* material, const aiScene* scene, VMaterial& outMaterial) const
     {
         if (!material)
             return;
@@ -3536,7 +4092,7 @@ namespace vasset
                 }
                 else
                 {
-                    tb.texture = loadTexture(material, type, ti);
+                    tb.texture = loadTexture(material, scene, type, ti);
                 }
 
                 outMaterial.textures.push_back(tb);
@@ -3647,7 +4203,7 @@ namespace vasset
                     outMaterial.core.unlit.color = glm::vec4(kd.r, kd.g, kd.b, 1.0f);
             }
 
-            outMaterial.core.unlit.colorTexture = loadTexture(material, aiTextureType_DIFFUSE);
+            outMaterial.core.unlit.colorTexture = loadTexture(material, scene, aiTextureType_DIFFUSE);
         }
         else if (hasSpecGloss)
         {
@@ -3670,8 +4226,8 @@ namespace vasset
             outMaterial.core.pbrSG.specularFactor   = glm::vec3(spec.r, spec.g, spec.b);
             outMaterial.core.pbrSG.glossinessFactor = glm::clamp(gloss, 0.0f, 1.0f);
 
-            outMaterial.core.pbrSG.diffuseTexture            = loadTexture(material, aiTextureType_DIFFUSE);
-            outMaterial.core.pbrSG.specularGlossinessTexture = loadTexture(material, aiTextureType_SPECULAR);
+            outMaterial.core.pbrSG.diffuseTexture            = loadTexture(material, scene, aiTextureType_DIFFUSE);
+            outMaterial.core.pbrSG.specularGlossinessTexture = loadTexture(material, scene, aiTextureType_SPECULAR);
         }
         else if (!hasMetallicRoughnessHints)
         {
@@ -3695,11 +4251,11 @@ namespace vasset
             outMaterial.core.phong.ior       = Ni;
             outMaterial.core.phong.emissive  = glm::vec3(ke.r, ke.g, ke.b);
 
-            outMaterial.core.phong.diffuseTexture  = loadTexture(material, aiTextureType_DIFFUSE);
-            outMaterial.core.phong.specularTexture = loadTexture(material, aiTextureType_SPECULAR);
-            outMaterial.core.phong.normalTexture   = loadTexture(material, aiTextureType_NORMALS, 0, false);
-            outMaterial.core.phong.opacityTexture  = loadTexture(material, aiTextureType_OPACITY);
-            outMaterial.core.phong.emissiveTexture = loadTexture(material, aiTextureType_EMISSIVE);
+            outMaterial.core.phong.diffuseTexture  = loadTexture(material, scene, aiTextureType_DIFFUSE);
+            outMaterial.core.phong.specularTexture = loadTexture(material, scene, aiTextureType_SPECULAR);
+            outMaterial.core.phong.normalTexture   = loadTexture(material, scene, aiTextureType_NORMALS, 0, false);
+            outMaterial.core.phong.opacityTexture  = loadTexture(material, scene, aiTextureType_OPACITY);
+            outMaterial.core.phong.emissiveTexture = loadTexture(material, scene, aiTextureType_EMISSIVE);
         }
         else
         {
@@ -3779,16 +4335,16 @@ namespace vasset
                 outMaterial.core.pbrMR.doubleSided = true;
 
             // Core textures
-            outMaterial.core.pbrMR.baseColorTexture        = loadTexture(material, aiTextureType_DIFFUSE);
-            outMaterial.core.pbrMR.alphaTexture            = loadTexture(material, aiTextureType_OPACITY);
-            outMaterial.core.pbrMR.metallicTexture         = loadTexture(material, aiTextureType_METALNESS);
-            outMaterial.core.pbrMR.roughnessTexture        = loadTexture(material, aiTextureType_DIFFUSE_ROUGHNESS);
-            outMaterial.core.pbrMR.specularTexture         = loadTexture(material, aiTextureType_SPECULAR);
-            outMaterial.core.pbrMR.normalTexture           = loadTexture(material, aiTextureType_NORMALS, 0, hasOrmSpecularTexture);
-            outMaterial.core.pbrMR.ambientOcclusionTexture = loadTexture(material, aiTextureType_LIGHTMAP);
-            outMaterial.core.pbrMR.emissiveTexture         = loadTexture(material, aiTextureType_EMISSIVE);
+            outMaterial.core.pbrMR.baseColorTexture        = loadTexture(material, scene, aiTextureType_DIFFUSE);
+            outMaterial.core.pbrMR.alphaTexture            = loadTexture(material, scene, aiTextureType_OPACITY);
+            outMaterial.core.pbrMR.metallicTexture         = loadTexture(material, scene, aiTextureType_METALNESS);
+            outMaterial.core.pbrMR.roughnessTexture        = loadTexture(material, scene, aiTextureType_DIFFUSE_ROUGHNESS);
+            outMaterial.core.pbrMR.specularTexture         = loadTexture(material, scene, aiTextureType_SPECULAR);
+            outMaterial.core.pbrMR.normalTexture           = loadTexture(material, scene, aiTextureType_NORMALS, 0, hasOrmSpecularTexture);
+            outMaterial.core.pbrMR.ambientOcclusionTexture = loadTexture(material, scene, aiTextureType_LIGHTMAP);
+            outMaterial.core.pbrMR.emissiveTexture         = loadTexture(material, scene, aiTextureType_EMISSIVE);
             outMaterial.core.pbrMR.metallicRoughnessTexture =
-                loadTexture(material, aiTextureType_GLTF_METALLIC_ROUGHNESS);
+                loadTexture(material, scene, aiTextureType_GLTF_METALLIC_ROUGHNESS);
             if (hasOrmSpecularTexture && outMaterial.core.pbrMR.specularTexture.uuid != vbase::UUID {})
             {
                 // ORCA/SunTemple stores absolute ORM values in the legacy Specular slot.
@@ -3806,17 +4362,21 @@ namespace vasset
                   << std::endl;
     }
 
-    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, aiTextureType type) const
+    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, const aiScene* scene, aiTextureType type) const
     {
-        return loadTexture(material, type, 0);
-    }
-
-    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material, aiTextureType type, unsigned index) const
-    {
-        return loadTexture(material, type, index, false);
+        return loadTexture(material, scene, type, 0);
     }
 
     VTextureRef VMeshImporter::loadTexture(const aiMaterial* material,
+                                           const aiScene*    scene,
+                                           aiTextureType     type,
+                                           unsigned          index) const
+    {
+        return loadTexture(material, scene, type, index, false);
+    }
+
+    VTextureRef VMeshImporter::loadTexture(const aiMaterial* material,
+                                           const aiScene*    scene,
                                            aiTextureType     type,
                                            unsigned          index,
                                            bool              directXNormalMap) const
@@ -3830,14 +4390,132 @@ namespace vasset
             if (material->GetTexture(type, index, &str) == aiReturn_SUCCESS)
             {
                 VTexture              texture {};
-                std::filesystem::path relativePath(str.C_Str());
+                const std::string     textureKeyRaw = str.C_Str();
+                std::filesystem::path relativePath(textureKeyRaw);
 
                 std::filesystem::path texPath = (std::filesystem::path(m_FilePath).parent_path() / relativePath).lexically_normal();
                 const bool            normalMap = type == aiTextureType_NORMALS;
+                const auto            embeddedTexKey = std::string("embedded:") + textureKeyRaw +
+                                            (normalMap ? (directXNormalMap ? "|normal:dx" : "|normal:gl") : "");
                 const auto            texKey    = texPath.generic_string() +
                                        (normalMap ? (directXNormalMap ? "|normal:dx" : "|normal:gl") : "");
+                if (auto cachedIt = m_ModelTextureCache.find(embeddedTexKey); cachedIt != m_ModelTextureCache.end())
+                    return VTextureRef {cachedIt->second};
                 if (auto cachedIt = m_ModelTextureCache.find(texKey); cachedIt != m_ModelTextureCache.end())
                     return VTextureRef {cachedIt->second};
+
+                if (scene)
+                {
+                    const aiTexture* embeddedTexture = scene->GetEmbeddedTexture(textureKeyRaw.c_str());
+                    if (!embeddedTexture)
+                        embeddedTexture = scene->GetEmbeddedTexture(relativePath.filename().generic_string().c_str());
+
+                    if (embeddedTexture)
+                    {
+                        if (embeddedTexture->mHeight != 0u)
+                        {
+                            std::cerr << "Unsupported raw embedded texture: " << textureKeyRaw << std::endl;
+                            return {};
+                        }
+
+                        const auto* bytes = reinterpret_cast<const uint8_t*>(embeddedTexture->pcData);
+                        const auto  byteCount = static_cast<size_t>(embeddedTexture->mWidth);
+                        int width = 0;
+                        int height = 0;
+                        int channels = 0;
+                        if (byteCount == 0u || !stbi_info_from_memory(bytes, static_cast<int>(byteCount), &width, &height, &channels))
+                        {
+                            std::cerr << "Failed to decode embedded texture info: " << textureKeyRaw << std::endl;
+                            return {};
+                        }
+
+                        std::string ext = relativePath.extension().generic_string();
+                        if (ext.empty())
+                        {
+                            std::string hint = embeddedTexture->achFormatHint;
+                            hint = toLowerAscii(hint);
+                            if (hint == "jpg")
+                                ext = ".jpg";
+                            else if (hint == "jpeg")
+                                ext = ".jpeg";
+                            else if (hint == "png")
+                                ext = ".png";
+                            else if (hint == "bmp")
+                                ext = ".bmp";
+                            else if (hint == "tga")
+                                ext = ".tga";
+                        }
+
+                        const auto fileFormat = textureFileFormatFromExtension(ext);
+                        if (fileFormat == VTextureFileFormat::eUnknown)
+                        {
+                            std::cerr << "Unsupported embedded texture format: " << textureKeyRaw << std::endl;
+                            return {};
+                        }
+
+                        const std::filesystem::path modelPath(m_FilePath);
+                        const std::string relativeModelSource = m_Registry.getSourceAssetPath(modelPath.generic_string(), true);
+                        const std::string embeddedSourcePath = relativeModelSource + "#texture/" +
+                                                               sanitizeAssetSegment(textureKeyRaw) +
+                                                               (normalMap ? (directXNormalMap ? "_normal_dx" : "_normal_gl") : "");
+                        const std::string relativeImportedPath =
+                            m_Registry.getImportedAssetPath(
+                                VAssetType::eTexture,
+                                importedAssetKeyForCookedOutput(m_Registry, VAssetType::eTexture, embeddedSourcePath),
+                                true);
+                        const auto uuid = vbase::uuid_from_string_key(relativeImportedPath);
+
+                        texture.uuid       = uuid;
+                        texture.width      = static_cast<uint32_t>(width);
+                        texture.height     = static_cast<uint32_t>(height);
+                        texture.depth      = 1u;
+                        texture.mipLevels  = 1u;
+                        texture.arrayLayers = 1u;
+                        texture.isCubemap  = false;
+                        texture.type       = VTextureDimension::e2D;
+                        texture.format     = VTextureFormat::eRGBA8;
+                        texture.fileFormat = fileFormat;
+                        texture.compressedBasisU = false;
+                        texture.data.assign(bytes, bytes + byteCount);
+
+                        const auto importedPath =
+                            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
+                        auto sr = saveTexture(texture, importedPath);
+                        if (!sr)
+                        {
+                            std::cerr << "Failed to save embedded texture: " << textureKeyRaw << std::endl;
+                            return {};
+                        }
+
+                        auto rr = m_Registry.registerAsset(uuid, embeddedSourcePath, relativeImportedPath, VAssetType::eTexture);
+                        if (!rr)
+                        {
+                            std::cerr << "Failed to register embedded texture: " << textureKeyRaw << std::endl;
+                            return {};
+                        }
+
+                        const uint64_t sourceHash = hashString(textureKeyRaw);
+                        const uint64_t dependencyHash = hashU64(byteCount, 0);
+                        const uint64_t paramsHash = textureImportParamsHash(VTextureImporter::ImportOptions {});
+                        (void)updateImportDatabaseRecord(m_Registry,
+                                                         uuid,
+                                                         toString(VAssetType::eTexture),
+                                                         embeddedSourcePath,
+                                                         relativeImportedPath,
+                                                         "embedded_texture:1",
+                                                         "vtexture:1",
+                                                         sourceHash,
+                                                         dependencyHash,
+                                                         paramsHash);
+
+                        m_ModelTextureCache.emplace(embeddedTexKey, uuid);
+                        ++m_ModelProgressProcessed;
+                        notifyProgress(embeddedSourcePath, m_ModelProgressProcessed, m_ModelProgressTotal);
+                        std::cout << "  Loaded embedded texture: " << textureKeyRaw
+                                  << ", uuid: " << vbase::to_string(uuid) << std::endl;
+                        return VTextureRef {uuid};
+                    }
+                }
 
                 vbase::Result<vbase::UUID, AssetError> tr =
                     vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
@@ -4092,8 +4770,7 @@ namespace vasset
                                               sourceHash,
                                               dependencyHash,
                                               paramsHash,
-                                              {relativeImportedPath}) ||
-                !importDatabaseHasRecord(m_Registry, relativeSrcPath))
+                                              {relativeImportedPath}))
             {
                 (void)updateImportDatabaseRecord(m_Registry,
                                                  lookupUUID,

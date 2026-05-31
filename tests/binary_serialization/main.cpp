@@ -138,6 +138,90 @@ TEST(MeshSerialization, BasicSerialization)
     ASSERT_EQ(loadedMesh.materials.size(), mesh.materials.size());
 }
 
+TEST(MeshSerialization, SkinMetadataRoundTrip)
+{
+    VMesh mesh {};
+    mesh.name        = "Skinned Mesh";
+    mesh.uuid        = vbase::uuid_random();
+    mesh.vertexCount = 2;
+    mesh.vertexFlags =
+        VVertexFlags::ePosition | VVertexFlags::eJointIndices | VVertexFlags::eJointWeights;
+    mesh.positions = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    mesh.jointIndices = {glm::ivec4(0, 1, 2, 3), glm::ivec4(3, 2, 1, 0)};
+    mesh.jointWeights = {glm::vec4(0.4f, 0.3f, 0.2f, 0.1f), glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)};
+    mesh.indices = {0, 1};
+
+    VSubMesh subMesh {};
+    subMesh.vertexOffset = 0;
+    subMesh.vertexCount = 2;
+    subMesh.indexOffset = 0;
+    subMesh.indexCount = 2;
+    mesh.subMeshes.push_back(subMesh);
+
+    mesh.hasSkin = true;
+    mesh.skeleton = vbase::uuid_random();
+    mesh.skeletonPath = "characters/hero.fbx#skeleton";
+    mesh.jointNames = {"root", "spine"};
+    mesh.jointParents = {-1, 0};
+    mesh.inverseBindPoses = {glm::mat4(1.0f), glm::mat4(2.0f)};
+
+    auto result = saveMesh(mesh, "test_skinned_mesh.vmesh");
+    ASSERT_TRUE(result);
+
+    VMesh loaded {};
+    result = loadMesh("test_skinned_mesh.vmesh", loaded);
+    ASSERT_TRUE(result);
+
+    ASSERT_TRUE(loaded.hasSkin);
+    ASSERT_EQ(loaded.skeleton, mesh.skeleton);
+    ASSERT_EQ(loaded.skeletonPath, mesh.skeletonPath);
+    ASSERT_EQ(loaded.jointNames, mesh.jointNames);
+    ASSERT_EQ(loaded.jointParents, mesh.jointParents);
+    ASSERT_EQ(loaded.jointIndices, mesh.jointIndices);
+    ASSERT_EQ(loaded.jointWeights, mesh.jointWeights);
+    ASSERT_EQ(loaded.inverseBindPoses.size(), mesh.inverseBindPoses.size());
+    EXPECT_FLOAT_EQ(loaded.inverseBindPoses[1][0][0], 2.0f);
+}
+
+TEST(AnimationSerialization, SkeletonAndAnimationRoundTrip)
+{
+    VSkeleton skeleton {};
+    skeleton.uuid = vbase::uuid_random();
+    skeleton.name = "Hero Skeleton";
+    skeleton.jointNames = {"root", "hand"};
+    skeleton.jointParents = {-1, 0};
+    skeleton.ozzData = {std::byte {1}, std::byte {2}, std::byte {3}};
+
+    auto result = saveSkeleton(skeleton, "test_skeleton.vskel");
+    ASSERT_TRUE(result);
+
+    VSkeleton loadedSkeleton {};
+    result = loadSkeleton("test_skeleton.vskel", loadedSkeleton);
+    ASSERT_TRUE(result);
+    ASSERT_EQ(loadedSkeleton.uuid, skeleton.uuid);
+    ASSERT_EQ(loadedSkeleton.name, skeleton.name);
+    ASSERT_EQ(loadedSkeleton.jointNames, skeleton.jointNames);
+    ASSERT_EQ(loadedSkeleton.jointParents, skeleton.jointParents);
+    ASSERT_EQ(loadedSkeleton.ozzData, skeleton.ozzData);
+
+    VAnimation animation {};
+    animation.uuid = vbase::uuid_random();
+    animation.name = "Idle";
+    animation.duration = 1.5f;
+    animation.ozzData = {std::byte {4}, std::byte {5}};
+
+    result = saveAnimation(animation, "test_animation.vanim");
+    ASSERT_TRUE(result);
+
+    VAnimation loadedAnimation {};
+    result = loadAnimation("test_animation.vanim", loadedAnimation);
+    ASSERT_TRUE(result);
+    ASSERT_EQ(loadedAnimation.uuid, animation.uuid);
+    ASSERT_EQ(loadedAnimation.name, animation.name);
+    EXPECT_FLOAT_EQ(loadedAnimation.duration, animation.duration);
+    ASSERT_EQ(loadedAnimation.ozzData, animation.ozzData);
+}
+
 TEST(TextureSerialization, BasicSerialization)
 {
     VTexture texture {};

@@ -92,12 +92,12 @@ namespace vasset
         importModelPrefab(vbase::StringView filePath, VMesh& outMesh, bool forceReimport);
         void processNode(const aiNode*, const aiScene*, VMesh& outMesh) const;
         void processMesh(const aiMesh*, const aiScene*, VMesh& outMesh) const;
-        void processMaterial(const aiMaterial*, VMaterial& outMaterial) const;
+        void processMaterial(const aiMaterial*, const aiScene*, VMaterial& outMaterial) const;
         // Load and import texture referenced by Assimp material.
         // - If index is omitted, loads the first texture (index 0).
-        VTextureRef loadTexture(const aiMaterial*, aiTextureType) const;
-        VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index) const;
-        VTextureRef loadTexture(const aiMaterial*, aiTextureType, unsigned index, bool directXNormalMap) const;
+        VTextureRef loadTexture(const aiMaterial*, const aiScene*, aiTextureType) const;
+        VTextureRef loadTexture(const aiMaterial*, const aiScene*, aiTextureType, unsigned index) const;
+        VTextureRef loadTexture(const aiMaterial*, const aiScene*, aiTextureType, unsigned index, bool directXNormalMap) const;
 
         static void generateMeshlets(VMesh& outMesh);
         static void optimizeMeshIndices(VMesh& outMesh, const ImportOptions& options);

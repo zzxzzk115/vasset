@@ -5,6 +5,7 @@
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
 #include "vasset/vgaussiansplat.hpp"
+#include "vasset/vanimation.hpp"
 #include "vasset/vmaterial.hpp"
 #include "vasset/vmesh.hpp"
 #include "vasset/vpk.hpp"

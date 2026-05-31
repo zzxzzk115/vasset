@@ -8,6 +8,7 @@ end
 
 if enable_import_targets then
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
+    add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
     add_requires("vshadersystem v0.10.0", {configs = vshadersystem_configs})
 end
 add_requires("ktx", {configs = {
@@ -26,6 +27,7 @@ local runtime_headers = {
     "include/(vasset/vasset_registry.hpp)",
     "include/(vasset/vasset_runtime.hpp)",
     "include/(vasset/vasset_type.hpp)",
+    "include/(vasset/vanimation.hpp)",
     "include/(vasset/vgaussiansplat.hpp)",
     "include/(vasset/vmaterial.hpp)",
     "include/(vasset/vmesh.hpp)",
@@ -55,7 +57,7 @@ target("vasset")
     end
     add_includedirs("include", {public = true})
     add_headerfiles(table.unpack(runtime_headers))
-    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
+    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
               "src/vtexture.cpp")
     add_deps("dds-ktx", "vfilesystem", {public = true})
     add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })
@@ -84,7 +86,7 @@ if enable_import_targets then
         add_headerfiles(table.unpack(import_headers))
         add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
-        add_packages("assimp", "vshadersystem", { public = true })
+        add_packages("assimp", "ozz-animation", "vshadersystem", { public = true })
         if is_mode("debug") then
             add_defines("_DEBUG", { public = true })
         else
