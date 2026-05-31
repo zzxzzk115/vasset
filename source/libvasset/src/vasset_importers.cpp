@@ -918,8 +918,24 @@ namespace
     {
         std::string              name;
         std::string              root;
+        std::string              generatedRoot;
+        std::vector<std::string> generatedRoots;
+        std::string              generatedPrefix;
         std::string              keywords;
         std::vector<std::string> shaders;
+    };
+
+    struct ShaderManifestRoot
+    {
+        std::filesystem::path root;
+        std::string           virtualPrefix;
+    };
+
+    struct ShaderManifestSource
+    {
+        std::filesystem::path root;
+        std::string           relativePath;
+        std::string           virtualPath;
     };
 
     std::string bytesToString(const std::vector<uint8_t>& bytes)
@@ -959,10 +975,14 @@ namespace
 
         const auto text = bytesToString(bytes);
         ShaderLibraryManifest manifest;
-        manifest.name     = parseManifestStringField(text, "name").value_or(path.stem().stem().generic_string());
-        manifest.root     = parseManifestStringField(text, "root").value_or(path.parent_path().filename().generic_string());
-        manifest.keywords = parseManifestStringField(text, "keywords").value_or(std::string {});
-        manifest.shaders  = parseManifestStringArrayField(text, "shaders");
+        manifest.name = parseManifestStringField(text, "name").value_or(path.stem().stem().generic_string());
+        manifest.root =
+            parseManifestStringField(text, "root").value_or(path.parent_path().filename().generic_string());
+        manifest.generatedRoot  = parseManifestStringField(text, "generatedRoot").value_or(std::string {});
+        manifest.generatedRoots = parseManifestStringArrayField(text, "generatedRoots");
+        manifest.generatedPrefix = parseManifestStringField(text, "generatedPrefix").value_or(std::string {});
+        manifest.keywords       = parseManifestStringField(text, "keywords").value_or(std::string {});
+        manifest.shaders        = parseManifestStringArrayField(text, "shaders");
         if (manifest.shaders.empty())
             manifest.shaders.push_back("**/*.vshader");
 
@@ -1035,6 +1055,68 @@ namespace
         return out;
     }
 
+    std::string normalizeShaderVirtualPrefix(std::string prefix)
+    {
+        std::ranges::replace(prefix, '\\', '/');
+        while (!prefix.empty() && prefix.front() == '/')
+            prefix.erase(prefix.begin());
+        while (!prefix.empty() && prefix.back() == '/')
+            prefix.pop_back();
+        return prefix;
+    }
+
+    std::vector<ShaderManifestRoot>
+    shaderLibrarySourceRoots(const std::filesystem::path& assetRoot, const ShaderLibraryManifest& manifest)
+    {
+        std::vector<ShaderManifestRoot> roots;
+        roots.push_back(ShaderManifestRoot {
+            .root          = (assetRoot / manifest.root).lexically_normal(),
+            .virtualPrefix = {},
+        });
+
+        const auto implicitGeneratedRoot = "../.vultra/generated/shaders";
+        const auto generatedPrefix =
+            normalizeShaderVirtualPrefix(manifest.generatedPrefix.empty() ? "generated" : manifest.generatedPrefix);
+        auto appendRoot = [&](const std::string& root) {
+            if (!root.empty())
+            {
+                roots.push_back(ShaderManifestRoot {
+                    .root          = (assetRoot / root).lexically_normal(),
+                    .virtualPrefix = generatedPrefix,
+                });
+            }
+        };
+        appendRoot(implicitGeneratedRoot);
+        appendRoot(manifest.generatedRoot);
+        for (const auto& root : manifest.generatedRoots)
+            appendRoot(root);
+
+        return roots;
+    }
+
+    std::vector<ShaderManifestSource>
+    collectShaderLibrarySources(const std::filesystem::path& assetRoot, const ShaderLibraryManifest& manifest)
+    {
+        std::vector<ShaderManifestSource> out;
+        std::unordered_set<std::string>   seenVirtualPaths;
+
+        for (const auto& root : shaderLibrarySourceRoots(assetRoot, manifest))
+        {
+            for (const auto& shader : collectShaderManifestFiles(root.root, manifest.shaders))
+            {
+                const auto virtualPath = root.virtualPrefix.empty() ? shader : root.virtualPrefix + "/" + shader;
+                if (!seenVirtualPaths.insert(virtualPath).second)
+                    continue;
+                out.push_back(ShaderManifestSource {
+                    .root         = root.root,
+                    .relativePath = shader,
+                    .virtualPath  = virtualPath,
+                });
+            }
+        }
+        return out;
+    }
+
     uint64_t shaderLibraryDependencyHash(
         const std::filesystem::path& assetRoot,
         const ShaderLibraryManifest&  manifest,
@@ -1045,11 +1127,10 @@ namespace
         if (!manifest.keywords.empty())
             h = hashFile(assetRoot / manifest.keywords, h);
 
-        const auto shaderRoot = assetRoot / manifest.root;
-        for (const auto& shader : collectShaderManifestFiles(shaderRoot, manifest.shaders))
+        for (const auto& source : collectShaderLibrarySources(assetRoot, manifest))
         {
-            h = hashString(shader, h);
-            h = hashFile(shaderRoot / shader, h);
+            h = hashString(source.virtualPath, h);
+            h = hashFile(source.root / source.relativePath, h);
         }
 
         for (const auto& include : virtualIncludes)
@@ -1061,16 +1142,48 @@ namespace
         return h;
     }
 
+    void emitShaderDiagnostic(const std::function<void(const vasset::VAssetImporter::ImportOptions::Diagnostic&)>& emit,
+                              const std::string&                                                                path,
+                              const std::string&                                                                message)
+    {
+        if (!emit)
+            return;
+
+        size_t      line {0};
+        size_t      column {0};
+        std::smatch match;
+        const std::regex patterns[] = {
+            std::regex(R"((?:line|:)\s*([0-9]+)\s*(?::|,|\))\s*([0-9]+)?)", std::regex::icase),
+            std::regex(R"(([0-9]+)\s*:\s*([0-9]+))"),
+        };
+        for (const auto& pattern : patterns)
+        {
+            if (!std::regex_search(message, match, pattern) || match.size() < 2)
+                continue;
+            line = static_cast<size_t>(std::stoull(match[1].str()));
+            if (match.size() > 2 && match[2].matched)
+                column = static_cast<size_t>(std::stoull(match[2].str()));
+            break;
+        }
+
+        emit(vasset::VAssetImporter::ImportOptions::Diagnostic {
+            .path    = path,
+            .line    = line,
+            .column  = column,
+            .message = message,
+        });
+    }
+
     bool runShaderCompiler(
         const std::filesystem::path& assetRoot,
         const ShaderLibraryManifest&  manifest,
         const std::filesystem::path&  output,
         const bool                    webgpu,
-        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes)
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes,
+        const std::function<void(const vasset::VAssetImporter::ImportOptions::Diagnostic&)>& diagnostics)
     {
-        const auto shaderRoot = assetRoot / manifest.root;
-        const auto shaders    = collectShaderManifestFiles(shaderRoot, manifest.shaders);
-        if (shaders.empty())
+        const auto sources = collectShaderLibrarySources(assetRoot, manifest);
+        if (sources.empty())
             return false;
 
         std::vector<uint8_t> engineKeywordsBytes;
@@ -1084,17 +1197,20 @@ namespace
             auto       parsed = vshadersystem::parse_engine_keywords_vkw(text);
             if (!parsed.isOk())
             {
-                std::cerr << "[vasset] failed to parse shader keywords: " << manifest.keywords << " ("
-                          << parsed.error().message << ")" << std::endl;
+                const auto message = parsed.error().message;
+                std::cerr << "[vasset] failed to parse shader keywords: " << manifest.keywords << " (" << message
+                          << ")" << std::endl;
+                emitShaderDiagnostic(diagnostics, manifest.keywords, message);
                 return false;
             }
             engineKeywords = std::move(parsed.value());
         }
 
         std::vector<vshadersystem::ShaderLibraryEntry> entries;
-        for (const auto& shader : shaders)
+        const auto sourceRoots = shaderLibrarySourceRoots(assetRoot, manifest);
+        for (const auto& source : sources)
         {
-            const auto shaderPath = shaderRoot / shader;
+            const auto shaderPath = source.root / source.relativePath;
             const auto sourceBytes = readAll(shaderPath);
             if (sourceBytes.empty())
                 return false;
@@ -1102,13 +1218,14 @@ namespace
             const auto sourceText = bytesToString(sourceBytes);
 
             vshadersystem::BuildRequest request;
-            request.source.virtualPath = shader;
+            request.source.virtualPath = source.virtualPath;
             request.source.sourceText = sourceText;
             request.options.language = vshadersystem::ShaderLanguage::eGLSL;
             request.options.webgpuProfile = webgpu;
             request.options.materialAccessMode =
                 webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
-            request.options.includeDirs.push_back(shaderRoot.generic_string());
+            for (const auto& root : sourceRoots)
+                request.options.includeDirs.push_back(root.root.generic_string());
             for (const auto& include : virtualIncludes)
             {
                 request.options.virtualIncludeFiles.push_back({
@@ -1126,8 +1243,10 @@ namespace
             auto built = vshadersystem::build_multiple_shaders(request);
             if (!built.isOk())
             {
-                std::cerr << "[vasset] shader compile failed: " << shader << " (" << built.error().message
-                          << ")" << std::endl;
+                const auto message = built.error().message;
+                std::cerr << "[vasset] shader compile failed: " << source.virtualPath << " (" << message << ")"
+                          << std::endl;
+                emitShaderDiagnostic(diagnostics, source.virtualPath, message);
                 return false;
             }
 
@@ -1152,8 +1271,12 @@ namespace
                                                  entries,
                                                  engineKeywordsBytes.empty() ? nullptr : &engineKeywordsBytes);
         if (!result.isOk())
-            std::cerr << "[vasset] failed to write shader library: " << output.generic_string() << " ("
-                      << result.error().message << ")" << std::endl;
+        {
+            const auto message = result.error().message;
+            std::cerr << "[vasset] failed to write shader library: " << output.generic_string() << " (" << message
+                      << ")" << std::endl;
+            emitShaderDiagnostic(diagnostics, manifest.name, message);
+        }
         return result.isOk();
     }
 
@@ -1186,10 +1309,9 @@ namespace
         if (!manifest.keywords.empty() && dependencyIsNewer(assetRoot / manifest.keywords))
             return false;
 
-        const auto shaderRoot = assetRoot / manifest.root;
-        for (const auto& shader : collectShaderManifestFiles(shaderRoot, manifest.shaders))
+        for (const auto& source : collectShaderLibrarySources(assetRoot, manifest))
         {
-            if (dependencyIsNewer(shaderRoot / shader))
+            if (dependencyIsNewer(source.root / source.relativePath))
                 return false;
         }
 
@@ -1210,7 +1332,8 @@ namespace
         vasset::VAssetRegistry& registry,
         vbase::StringView       filePath,
         bool                    forceReimport,
-        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes)
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>& virtualIncludes,
+        const std::function<void(const vasset::VAssetImporter::ImportOptions::Diagnostic&)>& diagnostics)
     {
         namespace fs = std::filesystem;
 
@@ -1280,9 +1403,9 @@ namespace
             }
         }
 
-        if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false, virtualIncludes))
+        if (!runShaderCompiler(assetRoot, *manifest, outVulkan, false, virtualIncludes, diagnostics))
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
-        if (!runShaderCompiler(assetRoot, *manifest, outWebGpu, true, virtualIncludes))
+        if (!runShaderCompiler(assetRoot, *manifest, outWebGpu, true, virtualIncludes, diagnostics))
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
 
         auto sr_import = saveSourceVImport(assetRoot, relativeSrcPath, vimport);
@@ -3105,6 +3228,8 @@ namespace vasset
             bool doubleSided = false;
             if (tryGet(props, AI_MATKEY_TWOSIDED, doubleSided))
                 outMaterial.core.pbrMR.doubleSided = doubleSided;
+            else if (std::filesystem::path(m_FilePath).extension() == ".obj")
+                outMaterial.core.pbrMR.doubleSided = true;
 
             // Core textures
             outMaterial.core.pbrMR.baseColorTexture        = loadTexture(material, aiTextureType_DIFFUSE);
@@ -3696,7 +3821,8 @@ namespace vasset
             else if (candidate.kind == CandidateKind::eShaderLibrary)
             {
                 std::cout << "[vasset] shaderlib: " << candidate.relativePath << std::endl;
-                auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes);
+                auto rr = importShaderLibraryManifest(
+                    m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes, m_Options.diagnostics);
                 if (!rr)
                 {
                     std::cerr << "[vasset] failed shaderlib: " << candidate.relativePath << " ("
@@ -3797,7 +3923,8 @@ namespace vasset
 
         if (isValidShaderLibraryManifest(osPath))
         {
-            auto rr = importShaderLibraryManifest(m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes);
+            auto rr = importShaderLibraryManifest(
+                m_Registry, filePath, reimport, m_Options.shaderVirtualIncludes, m_Options.diagnostics);
             if (!rr)
                 return vbase::Result<void, AssetError>::err(rr.error());
             notifyProgress(ImportProgress::Phase::eDone, 1);

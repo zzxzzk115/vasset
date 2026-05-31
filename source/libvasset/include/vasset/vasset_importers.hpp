@@ -148,6 +148,14 @@ namespace vasset
 
         struct ImportOptions
         {
+            struct Diagnostic
+            {
+                std::string path;
+                size_t      line {0};
+                size_t      column {0};
+                std::string message;
+            };
+
             struct ShaderVirtualIncludeFile
             {
                 std::string virtualPath;
@@ -157,6 +165,7 @@ namespace vasset
             std::vector<std::string> ignoredDirectories;
             std::vector<ShaderVirtualIncludeFile> shaderVirtualIncludes;
             std::function<void(const ImportProgress&)> progress;
+            std::function<void(const Diagnostic&)> diagnostics;
             bool importShaderLibraries {true};
         };
 
