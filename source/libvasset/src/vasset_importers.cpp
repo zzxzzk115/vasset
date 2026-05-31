@@ -395,13 +395,16 @@ namespace
         return nodeHasBoneDescendant(root, bones) ? root : nullptr;
     }
 
-    void appendRawSkeletonJoint(const aiNode* node, ozz::animation::offline::RawSkeleton::Joint& joint)
+    void appendRawSkeletonJoint(const aiNode*                                      node,
+                                ozz::animation::offline::RawSkeleton::Joint&       joint,
+                                std::unordered_map<std::string, ozz::math::Transform>& restPoseByName)
     {
         joint.name      = node->mName.C_Str();
         joint.transform = toOzz(node->mTransformation);
+        restPoseByName[std::string(joint.name.c_str())] = joint.transform;
         joint.children.resize(node->mNumChildren);
         for (unsigned int i = 0; i < node->mNumChildren; ++i)
-            appendRawSkeletonJoint(node->mChildren[i], joint.children[i]);
+            appendRawSkeletonJoint(node->mChildren[i], joint.children[i], restPoseByName);
     }
 
     std::vector<std::byte> serializeOzzSkeleton(const ozz::animation::Skeleton& skeleton)
@@ -424,6 +427,7 @@ namespace
     {
         vasset::VSkeleton skeleton;
         std::unordered_map<std::string, uint32_t> jointIndexByName;
+        std::vector<ozz::math::Transform> restLocalTransforms;
     };
 
     vbase::Result<ImportedSkeletonData, vasset::AssetError> buildImportedSkeleton(const aiScene* scene,
@@ -436,8 +440,9 @@ namespace
             return vbase::Result<ImportedSkeletonData, vasset::AssetError>::err(vasset::AssetError::eInvalidFormat);
 
         ozz::animation::offline::RawSkeleton rawSkeleton;
+        std::unordered_map<std::string, ozz::math::Transform> restPoseByName;
         rawSkeleton.roots.resize(1);
-        appendRawSkeletonJoint(rootBone, rawSkeleton.roots[0]);
+        appendRawSkeletonJoint(rootBone, rawSkeleton.roots[0], restPoseByName);
         if (!rawSkeleton.Validate())
             return vbase::Result<ImportedSkeletonData, vasset::AssetError>::err(vasset::AssetError::eInvalidFormat);
 
@@ -455,12 +460,17 @@ namespace
         const auto parents    = runtimeSkeleton->joint_parents();
         out.skeleton.jointNames.reserve(jointNames.size());
         out.skeleton.jointParents.reserve(parents.size());
+        out.restLocalTransforms.reserve(jointNames.size());
         for (int i = 0; i < runtimeSkeleton->num_joints(); ++i)
         {
             const std::string jointName = jointNames[i];
             out.jointIndexByName.emplace(jointName, static_cast<uint32_t>(i));
             out.skeleton.jointNames.push_back(jointName);
             out.skeleton.jointParents.push_back(parents[i]);
+            if (const auto it = restPoseByName.find(jointName); it != restPoseByName.end())
+                out.restLocalTransforms.push_back(it->second);
+            else
+                out.restLocalTransforms.push_back(ozz::math::Transform::identity());
         }
         return vbase::Result<ImportedSkeletonData, vasset::AssetError>::ok(std::move(out));
     }
@@ -635,6 +645,20 @@ namespace
                         .value = toOzz(key.mValue),
                     });
                 }
+            }
+
+            for (size_t trackIndex = 0; trackIndex < rawAnimation.tracks.size(); ++trackIndex)
+            {
+                const auto rest = trackIndex < skeleton.restLocalTransforms.size() ?
+                                      skeleton.restLocalTransforms[trackIndex] :
+                                      ozz::math::Transform::identity();
+                auto& track = rawAnimation.tracks[trackIndex];
+                if (track.translations.empty())
+                    track.translations.push_back({.time = 0.0f, .value = rest.translation});
+                if (track.rotations.empty())
+                    track.rotations.push_back({.time = 0.0f, .value = rest.rotation});
+                if (track.scales.empty())
+                    track.scales.push_back({.time = 0.0f, .value = rest.scale});
             }
 
             if (!rawAnimation.Validate())
@@ -3456,7 +3480,21 @@ namespace vasset
                  << "\" parent=0 uuid=\"" << vbase::to_string(rootUUID) << "\"]\n";
         manifest << "TransformComponent/position = (0, 0, 0)\n";
         manifest << "TransformComponent/rotation = (0, 0, 0, 1)\n";
-        manifest << "TransformComponent/scale = (1, 1, 1)\n\n";
+        manifest << "TransformComponent/scale = (1, 1, 1)\n";
+        if (importedSkeleton && !importedAnimations.empty())
+        {
+            const auto& firstAnimation = importedAnimations.front();
+            const std::string firstAnimationSourcePath =
+                relativeSrcPath + "#animation/" + sanitizeAssetSegment(firstAnimation.name);
+            manifest << "AnimatorComponent/skeleton = \"res://" << escapeSceneString(relativeSkeletonSourcePath) << "\"\n";
+            manifest << "AnimatorComponent/animation = \"res://" << escapeSceneString(firstAnimationSourcePath) << "\"\n";
+            manifest << "AnimatorComponent/playOnStart = true\n";
+            manifest << "AnimatorComponent/playing = true\n";
+            manifest << "AnimatorComponent/loop = true\n";
+            manifest << "AnimatorComponent/speed = 1\n";
+            manifest << "AnimatorComponent/time = 0\n";
+        }
+        manifest << "\n";
 
         int nextNodeId = 2;
         uint32_t nextMeshOrdinal = 0;
@@ -3560,7 +3598,7 @@ namespace vasset
                 if (!applySkinningData(aiMesh, *importedSkeleton, nodeMesh, inverseBindPoseByName))
                     throw AssetError::eInvalidFormat;
             }
-            const glm::vec3 localPivot = recenterMeshAroundBoundsCenter(nodeMesh);
+            const glm::vec3 localPivot = nodeMesh.hasSkin ? glm::vec3 {0.0f} : recenterMeshAroundBoundsCenter(nodeMesh);
             const auto      nodeTransform =
                 decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
 
