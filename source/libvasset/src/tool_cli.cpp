@@ -569,6 +569,7 @@ static int cmd_pack(int argc, char** argv)
                      "Optional:\n"
                      "  --zstd <level>\n"
                      "  --include <logical-path-prefix>\n"
+                     "  --root <scene-or-asset-root>\n"
                   << std::endl;
         return 1;
     }
@@ -586,6 +587,7 @@ static int cmd_pack(int argc, char** argv)
 
     int                      zstdLevel = 6;
     std::vector<std::string> includePaths;
+    std::vector<std::string> rootPaths;
     for (int i = 3; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -600,6 +602,11 @@ static int cmd_pack(int argc, char** argv)
             includePaths.push_back(normalizePackFilterPath(argv[i + 1]));
             ++i;
         }
+        else if (a == "--root" && i + 1 < argc)
+        {
+            rootPaths.push_back(argv[i + 1]);
+            ++i;
+        }
     }
 
     if (!includePaths.empty())
@@ -607,6 +614,12 @@ static int cmd_pack(int argc, char** argv)
         std::cout << "Applying pack include filters:" << std::endl;
         for (const auto& includePath : includePaths)
             std::cout << "  - " << includePath << std::endl;
+    }
+    if (!rootPaths.empty())
+    {
+        std::cout << "Packing dependency closure from roots:" << std::endl;
+        for (const auto& rootPath : rootPaths)
+            std::cout << "  - " << rootPath << std::endl;
     }
 
     namespace fs = std::filesystem;
@@ -618,100 +631,19 @@ static int cmd_pack(int argc, char** argv)
     const std::string registryPath = (fs::path(assetRoot) / "imported" / "asset_registry.tsv").generic_string();
     if (fs::exists(registryPath) && registry.load(registryPath))
     {
-        registry.setAssetRootPath(assetRoot);
-        registry.setImportedFolderName("imported");
+        VpkPackOptions options;
+        options.zstdLevel   = zstdLevel;
+        options.includePaths = includePaths;
+        options.rootPaths    = rootPaths;
 
-        std::vector<VpkWriteItem> items;
-        std::unordered_set<std::string> packedLogicalPaths;
-        for (const auto& [uuidStr, entry] : registry.getRegistry())
-        {
-            const std::string logicalPath = packLogicalPathForEntry(entry);
-            if (logicalPath.empty())
-                continue;
-            if (!matchesPackFilters(logicalPath, includePaths))
-                continue;
-
-            const std::string filePath =
-                (fs::path(assetRoot) / packDataPathForEntry(entry, fs::path(assetRoot))).generic_string();
-            std::vector<std::byte> data     = readBinaryFile(filePath);
-            if (data.empty() && !fs::exists(filePath))
-            {
-                std::cerr << "Missing pack file: " << filePath << " (" << uuidStr << ")" << std::endl;
-                continue;
-            }
-            if (entry.type == VAssetType::eTexture && !validateTexturePayloadForPack(filePath, logicalPath, data))
-                return 1;
-
-            VpkWriteItem it;
-            it.logicalPath = logicalPath;
-            if (!vbase::try_parse_uuid(uuidStr.c_str(), it.uuid))
-                it.uuid = vbase::uuid_from_string_key(logicalPath);
-            it.type          = entry.type;
-            it.bytes         = std::move(data);
-            it.allowCompress = true;
-            packedLogicalPaths.insert(logicalPath);
-            items.push_back(std::move(it));
-        }
-
-        for (const auto& entry : fs::recursive_directory_iterator(fs::path(assetRoot)))
-        {
-            if (!entry.is_regular_file())
-                continue;
-
-            const fs::path& p = entry.path();
-            if (p.extension() == ".vimport")
-                continue;
-
-            const std::string relPath = fs::relative(p, fs::path(assetRoot)).generic_string();
-            if (relPath.empty())
-                continue;
-
-            if (relPath.rfind("imported/", 0) == 0 || relPath == "imported")
-                continue;
-
-            if (relPath.size() >= 4 && relPath.substr(relPath.size() - 4) == ".vpk")
-                continue;
-
-            if (!isRuntimeRawAssetPath(relPath))
-                continue;
-
-            if (packedLogicalPaths.contains(relPath))
-                continue;
-            if (!matchesPackFilters(relPath, includePaths))
-                continue;
-
-            std::vector<std::byte> data = readBinaryFile(p);
-            if (data.empty() && !fs::exists(p))
-            {
-                std::cerr << "Missing raw file: " << p.generic_string() << std::endl;
-                continue;
-            }
-
-            VpkWriteItem it;
-            it.logicalPath   = relPath;
-            it.uuid          = vbase::uuid_from_string_key(relPath);
-            it.type          = inferRuntimeRawAssetType(relPath);
-            it.bytes         = std::move(data);
-            it.allowCompress = true;
-
-            packedLogicalPaths.insert(relPath);
-            items.push_back(std::move(it));
-        }
-
-        if (items.empty())
-        {
-            std::cerr << "No packable assets found under: " << assetRoot << std::endl;
-            return 1;
-        }
-
-        auto wr = writeVpk(outVpk, items, zstdLevel);
-        if (!wr)
+        auto packResult = packAssetFolderToVpk(assetRoot, outVpk, options);
+        if (!packResult)
         {
             std::cerr << "Failed to write vpk: " << outVpk << std::endl;
             return 1;
         }
 
-        std::cout << "Packed VPK: " << outVpk << " (" << items.size() << " entries)" << std::endl;
+        std::cout << "Packed VPK: " << outVpk << " (" << packResult.value() << " entries)" << std::endl;
         return 0;
     }
 
@@ -945,7 +877,7 @@ int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& i
                 R"(Usage:
 
     vasset-cli import <asset-root> [--reimport]
-    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path]
+    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset]
     vasset-cli validate-vpk <path/to/resources.vpk> [--asset-root <asset-root>] [--registry <asset_registry.tsv>]
 )" << std::endl;
             return 1;

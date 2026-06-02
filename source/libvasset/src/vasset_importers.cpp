@@ -88,6 +88,200 @@ namespace
     uint64_t hashU64(uint64_t value, uint64_t seed);
     uint64_t hashFile(const std::filesystem::path& path, uint64_t seed = 0);
 
+    std::string dependencyTargetPath(const vasset::VAssetRegistry& registry, const vbase::UUID& uuid)
+    {
+        const auto entry = registry.lookup(uuid);
+        if (!entry.sourcePath.empty())
+            return entry.sourcePath;
+        return entry.importedPath;
+    }
+
+    std::vector<vasset::VAssetDependency>
+    collectMeshDependencies(const vasset::VAssetRegistry& registry, const vasset::VMesh& mesh)
+    {
+        std::vector<vasset::VAssetDependency> out;
+        std::unordered_set<std::string>       seen;
+
+        auto add = [&](const vasset::VAssetDependencyKind kind,
+                       const vbase::UUID&                 target,
+                       std::string                        targetPath,
+                       std::string                        context) {
+            if (!target.valid() && targetPath.empty())
+                return;
+
+            const auto key = std::string(vasset::toString(kind)) + "|" +
+                             (target.valid() ? vbase::to_string(target) : std::string {}) + "|" + targetPath +
+                             "|" + context;
+            if (!seen.insert(key).second)
+                return;
+
+            vasset::VAssetDependency dep;
+            dep.kind       = kind;
+            dep.targetUuid = target;
+            dep.targetPath = std::move(targetPath);
+            dep.context    = std::move(context);
+            out.push_back(std::move(dep));
+        };
+
+        auto addTexture = [&](const vasset::VTextureRef& texture, const std::string& context) {
+            if (!texture.uuid.valid())
+                return;
+            add(vasset::VAssetDependencyKind::eMaterialTexture,
+                texture.uuid,
+                dependencyTargetPath(registry, texture.uuid),
+                context);
+        };
+
+        if (mesh.skeleton.valid())
+            add(vasset::VAssetDependencyKind::eSkeleton,
+                mesh.skeleton,
+                !mesh.skeletonPath.empty() ? mesh.skeletonPath : dependencyTargetPath(registry, mesh.skeleton),
+                "mesh.skeleton");
+
+        for (size_t materialIndex = 0; materialIndex < mesh.materials.size(); ++materialIndex)
+        {
+            const auto& material = mesh.materials[materialIndex];
+            const auto  prefix = "material[" + std::to_string(materialIndex) + "]" +
+                                (material.name.empty() ? std::string {} : (":" + material.name)) + ".";
+
+            for (const auto& binding : material.textures)
+                addTexture(binding.texture,
+                           prefix + "textureBinding(type=" + std::to_string(binding.type) + ",index=" +
+                               std::to_string(binding.index) + ")");
+
+            switch (material.model)
+            {
+                case vasset::VMaterialModel::ePBRMetallicRoughness:
+                    addTexture(material.core.pbrMR.baseColorTexture, prefix + "baseColorTexture");
+                    addTexture(material.core.pbrMR.alphaTexture, prefix + "alphaTexture");
+                    addTexture(material.core.pbrMR.metallicTexture, prefix + "metallicTexture");
+                    addTexture(material.core.pbrMR.roughnessTexture, prefix + "roughnessTexture");
+                    addTexture(material.core.pbrMR.metallicRoughnessTexture, prefix + "metallicRoughnessTexture");
+                    addTexture(material.core.pbrMR.specularTexture, prefix + "specularTexture");
+                    addTexture(material.core.pbrMR.normalTexture, prefix + "normalTexture");
+                    addTexture(material.core.pbrMR.ambientOcclusionTexture, prefix + "ambientOcclusionTexture");
+                    addTexture(material.core.pbrMR.emissiveTexture, prefix + "emissiveTexture");
+                    break;
+                case vasset::VMaterialModel::ePBRSpecularGlossiness:
+                    addTexture(material.core.pbrSG.diffuseTexture, prefix + "diffuseTexture");
+                    addTexture(material.core.pbrSG.specularGlossinessTexture, prefix + "specularGlossinessTexture");
+                    break;
+                case vasset::VMaterialModel::eUnlit:
+                    addTexture(material.core.unlit.colorTexture, prefix + "colorTexture");
+                    break;
+                case vasset::VMaterialModel::ePhong:
+                    addTexture(material.core.phong.diffuseTexture, prefix + "diffuseTexture");
+                    addTexture(material.core.phong.specularTexture, prefix + "specularTexture");
+                    addTexture(material.core.phong.normalTexture, prefix + "normalTexture");
+                    addTexture(material.core.phong.opacityTexture, prefix + "opacityTexture");
+                    addTexture(material.core.phong.emissiveTexture, prefix + "emissiveTexture");
+                    break;
+                case vasset::VMaterialModel::eUnknown:
+                case vasset::VMaterialModel::eCustom:
+                    break;
+            }
+        }
+
+        return out;
+    }
+
+    std::string normalizeAssetReferencePath(std::string path)
+    {
+        constexpr std::string_view resPrefix {"res://"};
+        if (path.starts_with(resPrefix))
+            path.erase(0, resPrefix.size());
+        for (char& ch : path)
+        {
+            if (ch == '\\')
+                ch = '/';
+        }
+        while (!path.empty() && path.front() == '/')
+            path.erase(path.begin());
+        return path;
+    }
+
+    std::optional<vbase::UUID> findRegistryUuidByPath(const vasset::VAssetRegistry& registry, const std::string& path)
+    {
+        const auto normalized = normalizeAssetReferencePath(path);
+        for (const auto& [uuidStr, entry] : registry.getRegistry())
+        {
+            if (normalizeAssetReferencePath(entry.sourcePath) != normalized &&
+                normalizeAssetReferencePath(entry.importedPath) != normalized)
+            {
+                continue;
+            }
+
+            vbase::UUID uuid {};
+            if (vbase::try_parse_uuid(uuidStr.c_str(), uuid))
+                return uuid;
+        }
+        return std::nullopt;
+    }
+
+    vasset::VAssetDependencyKind sourceTextDependencyKind(const vasset::VAssetType ownerType)
+    {
+        switch (ownerType)
+        {
+            case vasset::VAssetType::eScene:
+            case vasset::VAssetType::eSceneManifest:
+                return vasset::VAssetDependencyKind::eSceneComponent;
+            case vasset::VAssetType::eRenderGraphJson:
+                return vasset::VAssetDependencyKind::eRenderGraphFeature;
+            case vasset::VAssetType::eShaderLibraryManifest:
+            case vasset::VAssetType::eShaderLibrary:
+                return vasset::VAssetDependencyKind::eShaderLibrary;
+            default:
+                return vasset::VAssetDependencyKind::eRuntimePayload;
+        }
+    }
+
+    std::vector<vasset::VAssetDependency> collectSourceTextDependencies(const vasset::VAssetRegistry& registry,
+                                                                        const std::string&           text,
+                                                                        const vasset::VAssetType     ownerType)
+    {
+        std::vector<vasset::VAssetDependency> out;
+        std::unordered_set<std::string>       seen;
+
+        auto add = [&](vbase::UUID targetUuid, std::string targetPath, std::string context) {
+            if (!targetUuid.valid() && targetPath.empty())
+                return;
+
+            const auto normalizedPath = normalizeAssetReferencePath(targetPath);
+            const auto key = (targetUuid.valid() ? vbase::to_string(targetUuid) : std::string {}) + "|" +
+                             normalizedPath + "|" + context;
+            if (!seen.insert(key).second)
+                return;
+
+            vasset::VAssetDependency dep;
+            dep.kind       = sourceTextDependencyKind(ownerType);
+            dep.targetUuid = targetUuid;
+            dep.targetPath = normalizedPath;
+            dep.context    = std::move(context);
+            out.push_back(std::move(dep));
+        };
+
+        const std::regex resRefPattern(R"(res://[^"'\s\),\]]+)");
+        for (std::sregex_iterator it(text.begin(), text.end(), resRefPattern), end; it != end; ++it)
+        {
+            const auto rawPath = (*it).str();
+            auto       uuid = findRegistryUuidByPath(registry, rawPath).value_or(vbase::UUID {});
+            add(uuid, rawPath, "res-uri");
+        }
+
+        const std::regex uuidPattern(R"(["']?([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})["']?)");
+        for (std::sregex_iterator it(text.begin(), text.end(), uuidPattern), end; it != end; ++it)
+        {
+            vbase::UUID uuid {};
+            if (!vbase::try_parse_uuid((*it)[1].str().c_str(), uuid))
+                continue;
+            if (registry.lookup(uuid).type == vasset::VAssetType::eUnknown)
+                continue;
+            add(uuid, dependencyTargetPath(registry, uuid), "uuid");
+        }
+
+        return out;
+    }
+
     std::string assetErrorLabel(vasset::AssetError error)
     {
         switch (error)
@@ -2315,6 +2509,11 @@ namespace
         constexpr auto importerVersion = "source_text:1";
         constexpr auto outputSchema = "copy:1";
 
+        const auto srcBytes = readAll(osPath);
+        if (srcBytes.empty() && !fs::exists(osPath))
+            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
+        const auto sourceText = bytesToString(srcBytes);
+
         auto entry      = registry.lookup(lookupUUID);
         if (entry.type != vasset::VAssetType::eUnknown && !forceReimport &&
             outputFilesAreNewerThanSource(registry, osPath, {relativeImportedPath}))
@@ -2345,13 +2544,10 @@ namespace
                 auto sr_import = saveSourceVImport(fs::path(registry.getAssetRootPath()), relativeSrcPath, vimport);
                 if (!sr_import)
                     return vbase::Result<vbase::UUID, vasset::AssetError>::err(sr_import.error());
+                registry.setDependencies(lookupUUID, collectSourceTextDependencies(registry, sourceText, type));
                 return vbase::Result<vbase::UUID, vasset::AssetError>::ok(lookupUUID);
             }
         }
-
-        const auto srcBytes = readAll(osPath);
-        if (srcBytes.empty() && !fs::exists(osPath))
-            return vbase::Result<vbase::UUID, vasset::AssetError>::err(vasset::AssetError::eImportFailed);
 
         const fs::path importedPath = fs::path(registry.getAssetRootPath()) / relativeImportedPath;
         if (!writeAll(importedPath, srcBytes))
@@ -2364,6 +2560,7 @@ namespace
         auto rr = registry.registerAsset(lookupUUID, relativeSrcPath, relativeImportedPath, type);
         if (!rr)
             return vbase::Result<vbase::UUID, vasset::AssetError>::err(rr.error());
+        registry.setDependencies(lookupUUID, collectSourceTextDependencies(registry, sourceText, type));
 
         auto dr = updateImportDatabaseRecord(registry,
                                              lookupUUID,
@@ -3617,6 +3814,7 @@ namespace vasset
             auto rr = m_Registry.registerAsset(nodeMesh.uuid, relativeMeshSourcePath, relativeMeshPath, VAssetType::eMesh);
             if (!rr)
                 throw rr.error();
+            m_Registry.setDependencies(nodeMesh.uuid, collectMeshDependencies(m_Registry, nodeMesh));
 
             ++m_ModelProgressProcessed;
             notifyProgress(relativeMeshSourcePath, m_ModelProgressProcessed, m_ModelProgressTotal);
@@ -3857,6 +4055,7 @@ namespace vasset
         auto rr = m_Registry.registerAsset(outMesh.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eMesh);
         if (!rr)
             return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+        m_Registry.setDependencies(outMesh.uuid, collectMeshDependencies(m_Registry, outMesh));
 
         auto dr = updateImportDatabaseRecord(m_Registry,
                                              outMesh.uuid,

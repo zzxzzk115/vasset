@@ -22,6 +22,7 @@ namespace vasset
     {
         int                      zstdLevel {6};
         std::vector<std::string> includePaths;
+        std::vector<std::string> rootPaths;
     };
 
     vbase::Result<void, AssetError> importAssetFolder(vbase::StringView                  assetRoot,

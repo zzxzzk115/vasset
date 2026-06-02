@@ -9,8 +9,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <queue>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace vasset
@@ -47,6 +50,14 @@ namespace vasset
                 path.pop_back();
 
             return path;
+        }
+
+        std::string normalizePackRootPath(std::string path)
+        {
+            constexpr std::string_view resPrefix {"res://"};
+            if (path.starts_with(resPrefix))
+                path.erase(0, resPrefix.size());
+            return normalizePackFilterPath(std::move(path));
         }
 
         bool matchesPackFilters(std::string_view logicalPath, const std::vector<std::string>& includePaths)
@@ -131,6 +142,107 @@ namespace vasset
             return entry.sourcePath;
         }
 
+        struct PackReachableSet
+        {
+            bool                            enabled {false};
+            std::unordered_set<std::string> uuids;
+            std::unordered_set<std::string> paths;
+        };
+
+        std::optional<std::string> registryUuidForPath(const VAssetRegistry& registry, const std::string& path)
+        {
+            const auto normalized = normalizePackRootPath(path);
+            for (const auto& [uuidStr, entry] : registry.getRegistry())
+            {
+                if (normalizePackRootPath(entry.sourcePath) == normalized ||
+                    normalizePackRootPath(entry.importedPath) == normalized)
+                {
+                    return uuidStr;
+                }
+            }
+            return std::nullopt;
+        }
+
+        PackReachableSet buildPackReachableSet(const VAssetRegistry& registry, const VpkPackOptions& options)
+        {
+            PackReachableSet reachable;
+            reachable.enabled = !options.rootPaths.empty();
+            if (!reachable.enabled)
+                return reachable;
+
+            std::queue<std::string> pendingUuids;
+
+            auto addPath = [&](const std::string& rawPath) {
+                const auto path = normalizePackRootPath(rawPath);
+                if (!path.empty())
+                    reachable.paths.insert(path);
+                if (const auto uuid = registryUuidForPath(registry, path))
+                {
+                    if (reachable.uuids.insert(*uuid).second)
+                        pendingUuids.push(*uuid);
+                }
+            };
+
+            auto addUuid = [&](const vbase::UUID& uuid) {
+                if (!uuid.valid())
+                    return;
+                const auto uuidStr = vbase::to_string(uuid);
+                if (registry.lookup(uuid).type == VAssetType::eUnknown)
+                    return;
+                if (reachable.uuids.insert(uuidStr).second)
+                    pendingUuids.push(uuidStr);
+            };
+
+            for (const auto& root : options.rootPaths)
+            {
+                vbase::UUID uuid {};
+                if (vbase::try_parse_uuid(root.c_str(), uuid))
+                    addUuid(uuid);
+                addPath(root);
+            }
+
+            while (!pendingUuids.empty())
+            {
+                const auto ownerStr = pendingUuids.front();
+                pendingUuids.pop();
+
+                vbase::UUID owner {};
+                if (!vbase::try_parse_uuid(ownerStr.c_str(), owner))
+                    continue;
+
+                const auto entry = registry.lookup(owner);
+                if (!entry.sourcePath.empty())
+                    reachable.paths.insert(normalizePackRootPath(entry.sourcePath));
+                if (!entry.importedPath.empty())
+                    reachable.paths.insert(normalizePackRootPath(entry.importedPath));
+
+                for (const auto& dep : registry.dependencies(owner))
+                {
+                    addUuid(dep.targetUuid);
+                    addPath(dep.targetPath);
+                }
+            }
+
+            return reachable;
+        }
+
+        bool isReachableRegistryEntry(const PackReachableSet& reachable,
+                                      const std::string&      uuidStr,
+                                      const VAssetRegistry::AssetEntry& entry)
+        {
+            if (!reachable.enabled)
+                return true;
+            if (reachable.uuids.contains(uuidStr))
+                return true;
+            return reachable.paths.contains(normalizePackRootPath(entry.sourcePath)) ||
+                   reachable.paths.contains(normalizePackRootPath(entry.importedPath));
+        }
+
+        bool isReachableRawPath(const PackReachableSet& reachable, const std::string& relPath)
+        {
+            return !reachable.enabled || reachable.paths.contains(normalizePackRootPath(relPath));
+        }
+
         bool validateTexturePayloadForPack(std::string_view              cookedPath,
                                            std::string_view              logicalPath,
                                            const std::vector<std::byte>& data)
@@ -209,13 +321,18 @@ namespace vasset
         registry.setAssetRootPath(assetRootString);
         registry.setImportedFolderName("imported");
 
+        const auto reachable = buildPackReachableSet(registry, options);
+
         std::vector<VpkWriteItem>       items;
         std::unordered_set<std::string> packedLogicalPaths;
         for (const auto& [uuidStr, entry] : registry.getRegistry())
         {
             const std::string logicalPath = packLogicalPathForEntry(entry);
-            if (logicalPath.empty() || !matchesPackFilters(logicalPath, options.includePaths))
+            if (logicalPath.empty() || !isReachableRegistryEntry(reachable, uuidStr, entry) ||
+                !matchesPackFilters(logicalPath, options.includePaths))
+            {
                 continue;
+            }
 
             const fs::path filePath = assetRootPath / packDataPathForEntry(entry, assetRootPath);
             std::vector<std::byte> data = readBinaryFile(filePath);
@@ -255,8 +372,11 @@ namespace vasset
             if (p.extension() == ".vimport" || (relPath.size() >= 4 && relPath.substr(relPath.size() - 4) == ".vpk"))
                 continue;
             if (!isRuntimeRawAssetPath(relPath) || packedLogicalPaths.contains(relPath) ||
+                !isReachableRawPath(reachable, relPath) ||
                 !matchesPackFilters(relPath, options.includePaths))
+            {
                 continue;
+            }
 
             std::vector<std::byte> data = readBinaryFile(p);
             if (data.empty() && !fs::exists(p))

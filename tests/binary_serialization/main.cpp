@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -136,6 +137,134 @@ TEST(MeshSerialization, BasicSerialization)
         ASSERT_EQ(loadedMesh.subMeshes[i].materialIndex, mesh.subMeshes[i].materialIndex);
     }
     ASSERT_EQ(loadedMesh.materials.size(), mesh.materials.size());
+}
+
+TEST(AssetRegistryDependencies, SaveLoadValidateAndQuery)
+{
+    VAssetRegistry registry {};
+    registry.setAssetRootPath("resources");
+    registry.setImportedFolderName("imported");
+
+    const auto meshUuid    = vbase::uuid_from_string_key("mesh");
+    const auto textureUuid = vbase::uuid_from_string_key("texture");
+    const auto missingUuid = vbase::uuid_from_string_key("missing");
+
+    ASSERT_TRUE(registry.registerAsset(meshUuid, "models/mesh.gltf#mesh/0", "imported/Mesh/mesh.vmesh", VAssetType::eMesh));
+    ASSERT_TRUE(registry.registerAsset(textureUuid, "textures/albedo.png", "imported/Texture/albedo.vtexture", VAssetType::eTexture));
+
+    registry.setDependencies(meshUuid,
+                             {
+                                 VAssetDependency {
+                                     .kind       = VAssetDependencyKind::eMaterialTexture,
+                                     .targetUuid = textureUuid,
+                                     .targetPath = "textures/albedo.png",
+                                     .context    = "material[0].baseColorTexture",
+                                 },
+                                 VAssetDependency {
+                                     .kind       = VAssetDependencyKind::eMaterialTexture,
+                                     .targetUuid = missingUuid,
+                                     .targetPath = "textures/missing.png",
+                                     .context    = "material[0].normalTexture",
+                                 },
+                             });
+
+    const auto path = std::filesystem::temp_directory_path() / "vasset_registry_dependencies.tsv";
+    ASSERT_TRUE(registry.save(path.generic_string()));
+
+    VAssetRegistry loaded {};
+    ASSERT_TRUE(loaded.load(path.generic_string()));
+    std::filesystem::remove(path);
+
+    const auto deps = loaded.dependencies(meshUuid);
+    ASSERT_EQ(deps.size(), 2u);
+    EXPECT_EQ(deps[0].kind, VAssetDependencyKind::eMaterialTexture);
+    EXPECT_EQ(deps[0].context, "material[0].baseColorTexture");
+
+    const auto dependents = loaded.dependents(textureUuid);
+    ASSERT_EQ(dependents.size(), 1u);
+    EXPECT_EQ(dependents[0].ownerUuid, meshUuid);
+    EXPECT_EQ(dependents[0].dependency.targetPath, "textures/albedo.png");
+
+    const auto validation = loaded.validateDependencies();
+    ASSERT_FALSE(validation.ok());
+    ASSERT_EQ(validation.issues.size(), 1u);
+    EXPECT_EQ(validation.issues[0].kind, VAssetDependencyIssue::Kind::eMissingTarget);
+    EXPECT_EQ(validation.issues[0].dependency.targetPath, "textures/missing.png");
+}
+
+TEST(AssetRegistryDependencies, DetectsSimpleCycles)
+{
+    VAssetRegistry registry {};
+
+    const auto a = vbase::uuid_from_string_key("cycle-a");
+    const auto b = vbase::uuid_from_string_key("cycle-b");
+
+    ASSERT_TRUE(registry.registerAsset(a, "a.asset", "imported/Mesh/a.vmesh", VAssetType::eMesh));
+    ASSERT_TRUE(registry.registerAsset(b, "b.asset", "imported/Mesh/b.vmesh", VAssetType::eMesh));
+
+    registry.setDependencies(a, {VAssetDependency {.kind = VAssetDependencyKind::eRuntimePayload, .targetUuid = b}});
+    registry.setDependencies(b, {VAssetDependency {.kind = VAssetDependencyKind::eRuntimePayload, .targetUuid = a}});
+
+    const auto validation = registry.validateDependencies();
+    ASSERT_FALSE(validation.ok());
+
+    const auto cycleIt = std::find_if(validation.issues.begin(), validation.issues.end(), [](const auto& issue) {
+        return issue.kind == VAssetDependencyIssue::Kind::eCycle;
+    });
+    ASSERT_NE(cycleIt, validation.issues.end());
+    EXPECT_GE(cycleIt->cycle.size(), 3u);
+}
+
+TEST(AssetPack, RootClosureExcludesUnusedAssets)
+{
+    namespace fs = std::filesystem;
+
+    const fs::path root = fs::temp_directory_path() / "vasset_pack_root_closure";
+    fs::remove_all(root);
+    fs::create_directories(root / "scenes");
+    fs::create_directories(root / "scripts");
+    fs::create_directories(root / "imported");
+
+    {
+        std::ofstream(root / "scenes" / "main.vscn") << "ScriptComponent/scriptUri = \"res://scripts/used.lua\"\n";
+        std::ofstream(root / "scripts" / "used.lua") << "return { used = true }\n";
+        std::ofstream(root / "scripts" / "unused.lua") << "return { used = false }\n";
+    }
+
+    VAssetRegistry registry {};
+    registry.setAssetRootPath(root.generic_string());
+    registry.setImportedFolderName("imported");
+
+    const auto sceneUuid = vbase::uuid_from_string_key("imported/Scene/main");
+    const auto usedUuid = vbase::uuid_from_string_key("imported/ScriptLua/used");
+    const auto unusedUuid = vbase::uuid_from_string_key("imported/ScriptLua/unused");
+
+    ASSERT_TRUE(registry.registerAsset(sceneUuid, "scenes/main.vscn", "imported/Scene/main", VAssetType::eScene));
+    ASSERT_TRUE(registry.registerAsset(usedUuid, "scripts/used.lua", "imported/ScriptLua/used", VAssetType::eScriptLua));
+    ASSERT_TRUE(
+        registry.registerAsset(unusedUuid, "scripts/unused.lua", "imported/ScriptLua/unused", VAssetType::eScriptLua));
+    registry.setDependencies(sceneUuid,
+                             {VAssetDependency {
+                                 .kind       = VAssetDependencyKind::eSceneComponent,
+                                 .targetUuid = usedUuid,
+                                 .targetPath = "scripts/used.lua",
+                                 .context    = "script",
+                             }});
+    ASSERT_TRUE(registry.save((root / "imported" / "asset_registry.tsv").generic_string()));
+
+    const auto outVpk = root / "resources.vpk";
+    VpkPackOptions options;
+    options.rootPaths = {"res://scenes/main.vscn"};
+    auto packResult = packAssetFolderToVpk(root.generic_string(), outVpk.generic_string(), options);
+    ASSERT_TRUE(packResult);
+
+    auto opened = openVpk(outVpk.generic_string());
+    ASSERT_TRUE(opened);
+    EXPECT_TRUE(readVpkFile(opened.value(), outVpk.generic_string(), "scenes/main.vscn"));
+    EXPECT_TRUE(readVpkFile(opened.value(), outVpk.generic_string(), "scripts/used.lua"));
+    EXPECT_FALSE(readVpkFile(opened.value(), outVpk.generic_string(), "scripts/unused.lua"));
+
+    fs::remove_all(root);
 }
 
 TEST(MeshSerialization, SkinMetadataRoundTrip)
