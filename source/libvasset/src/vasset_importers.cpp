@@ -901,11 +901,16 @@ namespace
                hasSuffix(path.filename().generic_string(), ".vmatgraph.json");
     }
 
+    bool isValidMaterialJson(const std::filesystem::path& path)
+    {
+        return hasSuffix(path.filename().generic_string(), ".vmat.json");
+    }
+
     bool isValidSourceTextAsset(const std::filesystem::path& path)
     {
         const auto ext = path.extension().generic_string();
         return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path) ||
-               isValidMaterialGraphJson(path);
+               isValidMaterialGraphJson(path) || isValidMaterialJson(path);
     }
 
     bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
@@ -1954,6 +1959,8 @@ namespace
             return vasset::VAssetType::eRenderGraphJson;
         if (isValidMaterialGraphJson(path))
             return vasset::VAssetType::eMaterialGraphJson;
+        if (isValidMaterialJson(path))
+            return vasset::VAssetType::eMaterial;
         const auto ext = path.extension().generic_string();
         if (ext == ".vscn")
             return vasset::VAssetType::eScene;
@@ -2051,8 +2058,16 @@ namespace
             {
                 if (i + 1 < glob.size() && glob[i + 1] == '*')
                 {
-                    out += ".*";
-                    ++i;
+                    if (i + 2 < glob.size() && (glob[i + 2] == '/' || glob[i + 2] == '\\'))
+                    {
+                        out += "(?:.*/)?";
+                        i += 2;
+                    }
+                    else
+                    {
+                        out += ".*";
+                        ++i;
+                    }
                 }
                 else
                 {
@@ -2263,17 +2278,36 @@ namespace
             const auto shaderPath = source.root / source.relativePath;
             const auto sourceBytes = readAll(shaderPath);
             if (sourceBytes.empty())
+            {
+                std::cerr << "[vasset] shader source is empty or unreadable: " << shaderPath.generic_string()
+                          << std::endl;
                 return false;
+            }
 
             const auto sourceText = bytesToString(sourceBytes);
+            const bool isVultraMeshMaterialShader =
+                sourceText.find("vultra/mesh_material.glsl") != std::string::npos;
+            const bool hasVshaderProperties = sourceText.find("[properties]") != std::string::npos;
 
             vshadersystem::BuildRequest request;
             request.source.virtualPath = source.virtualPath;
             request.source.sourceText = sourceText;
             request.options.language = vshadersystem::ShaderLanguage::eGLSL;
             request.options.webgpuProfile = webgpu;
-            request.options.materialAccessMode =
-                webgpu ? vshadersystem::MaterialAccessMode::eUBO : vshadersystem::MaterialAccessMode::eBDA;
+            request.options.materialAccessMode = vshadersystem::MaterialAccessMode::eSSBO;
+            if (isVultraMeshMaterialShader && hasVshaderProperties)
+            {
+                request.options.materialInjection = vshadersystem::CompileOptions::MaterialAccessInjection {
+                    .postMaterialDecl =
+                        "layout(set = 1, binding = 1, std430) readonly buffer VultraMaterialBlock\n"
+                        "{\n"
+                        "    Material vshader_Material;\n"
+                        "};\n"
+                        "Material vshader_LoadMaterial() { return vshader_Material; }\n",
+                    .bindlessTextureArrayName = "u_BindlessTextures",
+                    .macroPrefix              = "VULTRA_",
+                };
+            }
             for (const auto& root : sourceRoots)
                 request.options.includeDirs.push_back(root.root.generic_string());
             for (const auto& include : virtualIncludes)
@@ -2304,7 +2338,12 @@ namespace
             {
                 auto blob = vshadersystem::write_vshbin(result.binary);
                 if (!blob.isOk())
+                {
+                    std::cerr << "[vasset] failed to serialize shader binary: " << source.virtualPath << " ("
+                              << blob.error().message << ")" << std::endl;
+                    emitShaderDiagnostic(diagnostics, source.virtualPath, blob.error().message);
                     return false;
+                }
 
                 entries.push_back(vshadersystem::ShaderLibraryEntry {
                     .keyHash = result.binary.variantHash,
