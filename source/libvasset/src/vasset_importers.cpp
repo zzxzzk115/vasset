@@ -2,6 +2,7 @@
 #include "vasset/vasset_import_database.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
+#include "vasset/texture_import_params.hpp"
 #include "vasset/vanimation.hpp"
 #include "vasset/vgaussiansplat.hpp"
 #include "vasset/vimport.hpp"
@@ -2849,13 +2850,21 @@ namespace vasset
                 importedAssetKeyForCookedOutput(m_Registry, VAssetType::eTexture, relativeSrcPath),
                 true);
 
+        VImport     sourceVImport {};
+        auto        sourceSidecarPath = osPath;
+        sourceSidecarPath.replace_extension(".vimport");
+        if (auto loaded = loadVImport(sourceSidecarPath.generic_string()))
+            sourceVImport = std::move(loaded.value());
+        const auto resolvedParams = resolveTextureImportParams(sourceVImport.params, m_Options);
+        const auto& options       = resolvedParams.options;
+
         const auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         const uint64_t sourceHash     = hashFile(osPath);
         const bool likelyNormalMap = isLikelyNormalMapPath(osPath);
         const auto importHintReadme = likelyNormalMap ? findImportHintReadme(osPath) : std::filesystem::path {};
         const bool inferredDirectXNormalMap = readmeDeclaresDirectXNormal(importHintReadme);
         const uint64_t dependencyHash = likelyNormalMap && !importHintReadme.empty() ? hashFile(importHintReadme) : 0;
-        const uint64_t paramsHash     = textureImportParamsHash(m_Options);
+        const uint64_t paramsHash     = textureImportParamsHash(options);
         constexpr auto importerVersion = "texture:5";
         constexpr auto outputSchema = "vtexture:1";
 
@@ -2895,7 +2904,7 @@ namespace vasset
         outTexture.uuid = vbase::uuid_from_string_key(relativeImportedPath);
 
         // Default target format
-        auto targetFormat = m_Options.targetTextureFileFormat;
+        auto targetFormat = options.targetTextureFileFormat;
 
         // ------------------------------------------------------------
         // Extension dispatch
@@ -2927,16 +2936,16 @@ namespace vasset
             }
 
             const bool bakeBC5NormalMap =
-                tc.format == DDSKTX_FORMAT_BC5 && (m_Options.bakeNormalMap || likelyNormalMap);
+                tc.format == DDSKTX_FORMAT_BC5 && (options.bakeNormalMap || likelyNormalMap);
             if (bakeBC5NormalMap)
             {
                 std::vector<uint8_t> bakedPixels;
                 const bool compressBakedNormalWithBasisU =
-                    m_Options.targetTextureFileFormat == VTextureFileFormat::eKTX2;
+                    options.targetTextureFileFormat == VTextureFileFormat::eKTX2;
                 if (!bakeBC5NormalToRGBA8(tc,
                                           reinterpret_cast<const uint8_t*>(fileBytes.data()),
                                           fileBytes.size(),
-                                          m_Options.directXNormalMap || inferredDirectXNormalMap,
+                                          options.directXNormalMap || inferredDirectXNormalMap,
                                           bakedPixels) ||
                     !writeRGBA8ToKTX2(static_cast<uint32_t>(tc.width),
                                       static_cast<uint32_t>(tc.height),
@@ -3049,7 +3058,7 @@ namespace vasset
 
                 hdr = stbi_is_hdr_from_file(file);
 
-                stbi_set_flip_vertically_on_load(m_Options.flipY ? 1 : 0);
+                stbi_set_flip_vertically_on_load(options.flipY ? 1 : 0);
 
                 if (hdr)
                 {
@@ -3080,13 +3089,13 @@ namespace vasset
             std::vector<float>   downscaledf;
             void*                sourcePixels = pixelGuard.p;
 
-            if (m_Options.downscaleLargeTextures && m_Options.downscaleTargetDimension > 0)
+            if (options.downscaleLargeTextures && options.downscaleTargetDimension > 0)
             {
                 const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
-                if (longestEdge > m_Options.downscaleMinDimension)
+                if (longestEdge > options.downscaleMinDimension)
                 {
                     const double scale =
-                        static_cast<double>(m_Options.downscaleTargetDimension) / static_cast<double>(longestEdge);
+                        static_cast<double>(options.downscaleTargetDimension) / static_cast<double>(longestEdge);
                     const int nextWidth  = std::max(1, static_cast<int>(std::round(static_cast<double>(width) * scale)));
                     const int nextHeight =
                         std::max(1, static_cast<int>(std::round(static_cast<double>(height) * scale)));
@@ -3156,12 +3165,12 @@ namespace vasset
             if (targetFormat == VTextureFileFormat::eKTX2 && !hdr)
             {
                 shouldCompressWithBasisU = true;
-                if (m_Options.compressOnlyLargeTextures)
+                if (options.compressOnlyLargeTextures)
                 {
                     const uint32_t longestEdge = static_cast<uint32_t>(std::max(width, height));
-                    const bool     largeEnoughResolution = longestEdge >= m_Options.basisUCompressMinDimension;
+                    const bool     largeEnoughResolution = longestEdge >= options.basisUCompressMinDimension;
                     const bool     largeEnoughSourceSize =
-                        !fileSizeEc && sourceFileBytes >= m_Options.basisUCompressMinSourceBytes;
+                        !fileSizeEc && sourceFileBytes >= options.basisUCompressMinSourceBytes;
                     shouldCompressWithBasisU = wasDownscaled || (largeEnoughResolution && largeEnoughSourceSize);
 
                     if (!shouldCompressWithBasisU)
@@ -3173,8 +3182,8 @@ namespace vasset
                             std::cout << "unknown";
                         else
                             std::cout << sourceFileBytes;
-                        std::cout << ", thresholds=" << m_Options.basisUCompressMinDimension << "px/"
-                                  << m_Options.basisUCompressMinSourceBytes << "B)" << std::endl;
+                        std::cout << ", thresholds=" << options.basisUCompressMinDimension << "px/"
+                                  << options.basisUCompressMinSourceBytes << "B)" << std::endl;
                     }
                 }
 
@@ -3208,7 +3217,7 @@ namespace vasset
             ci.baseWidth       = width;
             ci.baseHeight      = height;
             ci.baseDepth       = 1;
-            ci.numLevels       = m_Options.generateMipmaps ? calculateMipLevels(width, height) : 1;
+            ci.numLevels       = options.generateMipmaps ? calculateMipLevels(width, height) : 1;
             ci.numLayers       = 1;
             ci.numFaces        = 1;
             ci.numDimensions   = 2;
@@ -3316,11 +3325,11 @@ namespace vasset
             {
                 ktxBasisParams params {};
                 params.structSize       = sizeof(ktxBasisParams);
-                params.uastc            = m_Options.uastc;
-                params.noSSE            = m_Options.noSSE;
-                params.qualityLevel     = m_Options.qualityLevel;
-                params.compressionLevel = m_Options.compressionLevel;
-                params.threadCount      = resolveBasisUThreadCount(m_Options.basisUThreadCount);
+                params.uastc            = options.uastc;
+                params.noSSE            = options.noSSE;
+                params.qualityLevel     = options.qualityLevel;
+                params.compressionLevel = options.compressionLevel;
+                params.threadCount      = resolveBasisUThreadCount(options.basisUThreadCount);
 
                 // Diagnostic: log vkFormat and mip count
                 std::cout << "BasisU: vkFormat=" << ci.vkFormat << " numLevels=" << ci.numLevels
@@ -3397,7 +3406,9 @@ namespace vasset
         vimport.uid      = outTexture.uuid;
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
-        auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
+        vimport.params =
+            normalizedTextureImportParams(std::move(sourceVImport.params), resolvedParams.subtype, options);
+        auto sr_import = saveVImport(vimport, sourceSidecarPath.generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
 
