@@ -901,6 +901,12 @@ namespace
                hasSuffix(path.filename().generic_string(), ".vmatgraph.json");
     }
 
+    bool isValidAnimatorGraphJson(const std::filesystem::path& path)
+    {
+        return path.extension().generic_string() == ".vanimgraph" ||
+               hasSuffix(path.filename().generic_string(), ".vanimgraph.json");
+    }
+
     bool isValidMaterialJson(const std::filesystem::path& path)
     {
         return hasSuffix(path.filename().generic_string(), ".vmat.json");
@@ -910,7 +916,7 @@ namespace
     {
         const auto ext = path.extension().generic_string();
         return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path) ||
-               isValidMaterialGraphJson(path) || isValidMaterialJson(path);
+               isValidMaterialGraphJson(path) || isValidAnimatorGraphJson(path) || isValidMaterialJson(path);
     }
 
     bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
@@ -1959,6 +1965,8 @@ namespace
             return vasset::VAssetType::eRenderGraphJson;
         if (isValidMaterialGraphJson(path))
             return vasset::VAssetType::eMaterialGraphJson;
+        if (isValidAnimatorGraphJson(path))
+            return vasset::VAssetType::eAnimatorGraphJson;
         if (isValidMaterialJson(path))
             return vasset::VAssetType::eMaterial;
         const auto ext = path.extension().generic_string();
