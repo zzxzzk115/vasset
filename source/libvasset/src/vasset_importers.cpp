@@ -3545,6 +3545,34 @@ namespace vasset
                                                  sourceHash,
                                                  dependencyHash,
                                                  paramsHash);
+
+                // Self-heal the dependency graph even when the cooked model is up-to-date.
+                // A skipped (unchanged) model never re-runs collectMeshDependencies, so any
+                // stale/incomplete per-node mesh dependency edges (e.g. a material's textures
+                // recorded as missing in a past import) would persist and silently drop those
+                // assets from a packed VPK (reachability is computed from these edges). Re-derive
+                // them from the cooked meshes — cheap: no assimp re-read, no texture recompress.
+                const std::string meshSourcePrefix = relativeSrcPath + "#mesh/";
+                std::vector<std::pair<vbase::UUID, std::string>> nodeMeshes; // (uuid, importedPath)
+                for (const auto& [uuidStr, depEntry] : m_Registry.getRegistry())
+                {
+                    if (depEntry.type != VAssetType::eMesh)
+                        continue;
+                    if (depEntry.sourcePath.rfind(meshSourcePrefix, 0) != 0)
+                        continue;
+                    vbase::UUID meshUuid {};
+                    if (vbase::try_parse_uuid(uuidStr.c_str(), meshUuid))
+                        nodeMeshes.emplace_back(meshUuid, depEntry.importedPath);
+                }
+                for (const auto& [meshUuid, importedMeshPath] : nodeMeshes)
+                {
+                    VMesh      cooked {};
+                    const auto cookedPath =
+                        (std::filesystem::path(m_Registry.getAssetRootPath()) / importedMeshPath).generic_string();
+                    if (loadMesh(cookedPath, cooked))
+                        m_Registry.setDependencies(meshUuid, collectMeshDependencies(m_Registry, cooked));
+                }
+
                 std::cout << "Model prefab already imported: " << entry.sourcePath << std::endl;
                 return vbase::Result<vbase::UUID, AssetError>::ok(manifestUUID);
             }
