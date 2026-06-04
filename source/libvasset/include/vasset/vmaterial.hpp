@@ -160,7 +160,12 @@ namespace vasset
         float     glossinessFactor {1.0f};
 
         VTextureRef diffuseTexture;
+        // RGB = specular (F0); A = glossiness when packed (glTF specular-glossiness).
         VTextureRef specularGlossinessTexture;
+        // Separate glossiness map (R channel), used when specular and glossiness are
+        // authored as two textures (e.g. Mixamo FBX). Falls back to specularGlossiness.A.
+        VTextureRef glossinessTexture;
+        VTextureRef normalTexture;
     };
 
     struct VMaterialUnlit

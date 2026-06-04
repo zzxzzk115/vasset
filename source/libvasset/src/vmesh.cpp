@@ -231,6 +231,8 @@ namespace vasset
                     writeRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
                     writeTextureRef(material.core.pbrSG.diffuseTexture);
                     writeTextureRef(material.core.pbrSG.specularGlossinessTexture);
+                    writeTextureRef(material.core.pbrSG.glossinessTexture);
+                    writeTextureRef(material.core.pbrSG.normalTexture);
                     break;
                 }
                 case VMaterialModel::ePhong: {
@@ -657,6 +659,8 @@ namespace vasset
                     readRaw(&material.core.pbrSG.glossinessFactor, sizeof(material.core.pbrSG.glossinessFactor));
                     readTextureRef(material.core.pbrSG.diffuseTexture);
                     readTextureRef(material.core.pbrSG.specularGlossinessTexture);
+                    readTextureRef(material.core.pbrSG.glossinessTexture);
+                    readTextureRef(material.core.pbrSG.normalTexture);
                     break;
                 }
                 case VMaterialModel::ePhong: {

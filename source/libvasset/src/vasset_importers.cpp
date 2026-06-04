@@ -4389,9 +4389,9 @@ namespace vasset
         // ------------------------------------------------------------
         // Model + feature flags (hints)
         // ------------------------------------------------------------
-        const bool isUnlit      = hasKeySubstring("unlit") || hasKeySubstring("Unlit");
-        const bool hasSpecGloss = hasKeySubstring("SpecularGlossiness") || hasKeySubstring("specularGloss") ||
-                                  hasKeySubstring("pbrSpecularGlossiness");
+        const bool isUnlit         = hasKeySubstring("unlit") || hasKeySubstring("Unlit");
+        const bool hasSpecGlossKey = hasKeySubstring("SpecularGlossiness") || hasKeySubstring("specularGloss") ||
+                                     hasKeySubstring("pbrSpecularGlossiness");
 
         outMaterial.features = VMaterialFeatureFlags::eFeature_None;
         if (hasKeySubstring("clearcoat"))
@@ -4464,11 +4464,19 @@ namespace vasset
             hasOrmSpecularTexture &&
             findTexturePathContaining(aiTextureType_DIFFUSE, "basecolor", baseColorTexturePath) &&
             inspectTextureAlpha(baseColorTexturePath) == TextureAlphaContent::eHasNonOpaque;
+        // A dedicated glossiness map (shininess slot) alongside a specular map is the classic
+        // specular-glossiness workflow (e.g. Mixamo FBX) even without a glTF SG key. SunTemple's
+        // packed ORM uses the specular slot but has no separate glossiness map, so it stays MR.
+        const bool hasGlossinessTexture = material->GetTextureCount(aiTextureType_SHININESS) > 0;
+        const bool hasSpecGloss         = hasSpecGlossKey || (hasGlossinessTexture && hasSpecularTexture);
+
         const bool hasMetallicRoughnessHints =
-            hasProp(AI_MATKEY_BASE_COLOR) || hasProp(AI_MATKEY_METALLIC_FACTOR) ||
-            hasProp(AI_MATKEY_ROUGHNESS_FACTOR) || material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0 ||
-            material->GetTextureCount(aiTextureType_METALNESS) > 0 ||
-            material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0 || hasOrmSpecularTexture;
+            !hasSpecGloss &&
+            (hasProp(AI_MATKEY_BASE_COLOR) || hasProp(AI_MATKEY_METALLIC_FACTOR) ||
+             hasProp(AI_MATKEY_ROUGHNESS_FACTOR) ||
+             material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0 ||
+             material->GetTextureCount(aiTextureType_METALNESS) > 0 ||
+             material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0 || hasOrmSpecularTexture);
 
         // Name
         aiString name;
@@ -4515,6 +4523,13 @@ namespace vasset
 
             outMaterial.core.pbrSG.diffuseTexture            = loadTexture(material, scene, aiTextureType_DIFFUSE);
             outMaterial.core.pbrSG.specularGlossinessTexture = loadTexture(material, scene, aiTextureType_SPECULAR);
+            // Some authoring tools (e.g. Mixamo FBX) export specular and glossiness as two
+            // separate maps; the glossiness map lands in the shininess slot. When present it
+            // drives roughness per-texel, so keep the glossiness factor as a unit multiplier.
+            outMaterial.core.pbrSG.glossinessTexture = loadTexture(material, scene, aiTextureType_SHININESS);
+            if (outMaterial.core.pbrSG.glossinessTexture.uuid != vbase::UUID {})
+                outMaterial.core.pbrSG.glossinessFactor = 1.0f;
+            outMaterial.core.pbrSG.normalTexture = loadTexture(material, scene, aiTextureType_NORMALS, 0, false);
         }
         else if (!hasMetallicRoughnessHints)
         {
