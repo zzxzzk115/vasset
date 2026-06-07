@@ -4693,6 +4693,21 @@ namespace vasset
                 outMaterial.core.pbrMR.metallicFactor  = 1.0f;
                 outMaterial.core.pbrMR.roughnessFactor = 1.0f;
             }
+
+            // Assimp's glTF importer does not always surface emissiveFactor via
+            // AI_MATKEY_COLOR_EMISSIVE; it can stay black even when the material has an
+            // emissive texture. Per glTF, emissive = emissiveFactor * emissiveTexture, so a
+            // black factor would zero out the texture. Default the factor to white when an
+            // emissive texture is present but the factor came through as black.
+            if (outMaterial.core.pbrMR.emissiveTexture.uuid != vbase::UUID {} &&
+                outMaterial.core.pbrMR.emissiveColorIntensity.r == 0.0f &&
+                outMaterial.core.pbrMR.emissiveColorIntensity.g == 0.0f &&
+                outMaterial.core.pbrMR.emissiveColorIntensity.b == 0.0f)
+            {
+                outMaterial.core.pbrMR.emissiveColorIntensity.r = 1.0f;
+                outMaterial.core.pbrMR.emissiveColorIntensity.g = 1.0f;
+                outMaterial.core.pbrMR.emissiveColorIntensity.b = 1.0f;
+            }
         }
 
         if (outMaterial.name.empty())
