@@ -9,7 +9,7 @@ end
 if enable_import_targets then
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
-    add_requires("vshadersystem v0.10.2", {configs = vshadersystem_configs})
+    add_requires("vshadersystem v0.11.0", {configs = vshadersystem_configs})
 end
 add_requires("ktx", {configs = {
     decoder = true,

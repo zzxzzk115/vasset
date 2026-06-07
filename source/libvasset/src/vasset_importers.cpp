@@ -2281,6 +2281,15 @@ namespace
 
         std::vector<vshadersystem::ShaderLibraryEntry> entries;
         const auto sourceRoots = shaderLibrarySourceRoots(assetRoot, manifest);
+
+        // Builtin GLSL includes as a single root VFS mount: they resolve by
+        // absolute path (e.g. "include/vultra/mesh_material.glsl") from any
+        // shader directory, including generated/material-graph shaders.
+        vshadersystem::VfsMount builtinMount;
+        builtinMount.files.reserve(virtualIncludes.size());
+        for (const auto& include : virtualIncludes)
+            builtinMount.files.push_back({include.virtualPath, include.sourceText});
+
         for (const auto& source : sources)
         {
             const auto shaderPath = source.root / source.relativePath;
@@ -2318,13 +2327,7 @@ namespace
             }
             for (const auto& root : sourceRoots)
                 request.options.includeDirs.push_back(root.root.generic_string());
-            for (const auto& include : virtualIncludes)
-            {
-                request.options.virtualIncludeFiles.push_back({
-                    .virtualPath = include.virtualPath,
-                    .sourceText  = include.sourceText,
-                });
-            }
+            request.options.vfsMounts.push_back(builtinMount);
             request.enableCache = false;
             if (engineKeywords)
             {
