@@ -8,10 +8,13 @@ target("vasset-cli")
 
     -- add deps
     add_deps("vasset-import")
-    if os.isdir(path.join(os.projectdir(), "builtin/generated/include")) then
-        add_deps("vultra_builtin_assets")
-        add_includedirs(path.join(os.projectdir(), "builtin/generated/include"))
+    -- The engine GLSL include sources are read straight from builtin/shaders/include on disk (the
+    -- same source files builtin.vpk is packed from); no generated header is involved. Pass the
+    -- directory as a string define (forward-slashed so Windows backslashes don't need escaping).
+    local builtin_shader_includes = path.join(os.projectdir(), "builtin/shaders/include"):gsub("\\", "/")
+    if os.isdir(builtin_shader_includes) then
         add_defines("VASSET_CLI_HAS_VULTRA_BUILTIN_SHADERS")
+        add_defines("VASSET_CLI_BUILTIN_SHADER_INCLUDE_DIR=\"" .. builtin_shader_includes .. "\"")
     end
 
     -- add defines
