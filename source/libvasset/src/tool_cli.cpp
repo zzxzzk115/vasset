@@ -859,6 +859,57 @@ static int cmd_validate_vpk(int argc, char** argv)
     return 0;
 }
 
+// Import the asset folder, then pack it into <out.vpk> -- import + pack in a single process (one
+// folder scan's worth of work per phase, instead of import running twice across separate tools).
+static int cmd_cook(int argc, char** argv, const VAssetImporter::ImportOptions& importOptions = {})
+{
+    if (argc < 3)
+    {
+        std::cout << "Usage: vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] "
+                     "[--include logical/path] [--root res://scene-or-asset]\n"
+                  << "  Imports the asset folder, then packs it into <out.vpk> (import + pack)." << std::endl;
+        return 1;
+    }
+
+    const std::string assetRoot = argv[1];
+    const std::string outVpk    = argv[2];
+
+    // --reimport applies to the import phase; everything else is forwarded to pack.
+    bool                     reimport = false;
+    std::vector<std::string> packExtra;
+    for (int i = 3; i < argc; ++i)
+    {
+        const std::string a = argv[i];
+        if (a == "--reimport")
+            reimport = true;
+        else
+            packExtra.push_back(a);
+    }
+
+    auto invoke = [](std::vector<std::string> args, auto&& fn) {
+        std::vector<char*> cargv;
+        cargv.reserve(args.size());
+        for (auto& s : args)
+            cargv.push_back(s.data());
+        return fn(static_cast<int>(cargv.size()), cargv.data());
+    };
+
+    {
+        std::vector<std::string> importArgs {"import", assetRoot};
+        if (reimport)
+            importArgs.emplace_back("--reimport");
+        const int rc = invoke(std::move(importArgs),
+                              [&](int c, char** v) { return cmd_import(c, v, importOptions); });
+        if (rc != 0)
+            return rc;
+    }
+
+    std::vector<std::string> packArgs {"pack", assetRoot, outVpk};
+    for (auto& a : packExtra)
+        packArgs.push_back(a);
+    return invoke(std::move(packArgs), [](int c, char** v) { return cmd_pack(c, v); });
+}
+
 namespace vasset::tool
 {
 
@@ -878,6 +929,7 @@ int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& i
 
     vasset-cli import <asset-root> [--reimport]
     vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset]
+    vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] [--include logical/path] [--root res://scene-or-asset]
     vasset-cli validate-vpk <path/to/resources.vpk> [--asset-root <asset-root>] [--registry <asset_registry.tsv>]
 )" << std::endl;
             return 1;
@@ -888,6 +940,8 @@ int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& i
             return cmd_import(argc - 1, argv + 1, importOptions);
         if (cmd == "pack")
             return cmd_pack(argc - 1, argv + 1);
+        if (cmd == "cook")
+            return cmd_cook(argc - 1, argv + 1, importOptions);
         if (cmd == "validate-vpk")
             return cmd_validate_vpk(argc - 1, argv + 1);
 
