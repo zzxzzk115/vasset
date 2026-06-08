@@ -64,111 +64,146 @@ namespace vasset
         uint32_t    pathSize   = 0;
     };
 
+    namespace
+    {
+        // Parse VPK metadata (header/index/string-table/registry) via a random-access byte reader.
+        // readAt(offset, dst, n) must copy n bytes at file offset `offset` and return false on any
+        // out-of-range / short read. Shared by the on-disk and in-memory open paths.
+        template<typename ReadAt>
+        vbase::Result<VpkReadOnly, AssetError> parseVpk(ReadAt&& readAt)
+        {
+            VpkReadOnly out {};
+
+            char     magic[4] = {};
+            uint32_t version  = 0;
+            if (!readAt(0, magic, 4) || !readAt(4, &version, sizeof(uint32_t)))
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+            if (std::memcmp(magic, "VPK\0", 4) != 0)
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+            if (version == 1)
+            {
+                VpkHeaderV1 h1 {};
+                if (!readAt(0, &h1, sizeof(VpkHeaderV1)))
+                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+                std::memcpy(out.header.magic, h1.magic, 4);
+                out.header.version      = h1.version;
+                out.header.flags        = h1.flags;
+                out.header.fileCount    = h1.fileCount;
+                out.header.indexOffset  = h1.indexOffset;
+                out.header.indexSize    = h1.indexSize;
+                out.header.stringOffset = h1.stringOffset;
+                out.header.stringSize   = h1.stringSize;
+                out.header.dataOffset   = h1.dataOffset;
+
+                out.header.registryOffset = 0;
+                out.header.registrySize   = 0;
+                out.header.registryCount  = 0;
+            }
+            else if (version == 2 || version == VPK_VERSION)
+            {
+                if (!readAt(0, &out.header, sizeof(VpkHeader)))
+                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+            }
+            else
+            {
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+            }
+
+            // Index
+            out.entries.resize(out.header.fileCount);
+            if (out.header.indexSize > 0 &&
+                !readAt(out.header.indexOffset, out.entries.data(), static_cast<size_t>(out.header.indexSize)))
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+            // String table
+            out.stringTable.resize(static_cast<size_t>(out.header.stringSize));
+            if (out.header.stringSize > 0 &&
+                !readAt(out.header.stringOffset, out.stringTable.data(), static_cast<size_t>(out.header.stringSize)))
+                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+            // Registry (v2+)
+            if (out.header.registryCount > 0 && out.header.registrySize > 0)
+            {
+                if (version == 2)
+                {
+                    std::vector<VpkAssetRegistryEntryV2> registryV2;
+                    registryV2.resize(static_cast<size_t>(out.header.registryCount));
+                    if (!readAt(out.header.registryOffset,
+                                registryV2.data(),
+                                static_cast<size_t>(out.header.registrySize)))
+                        return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+
+                    out.registry.reserve(registryV2.size());
+                    for (const auto& r2 : registryV2)
+                    {
+                        VpkAssetRegistryEntry r {};
+                        r.uuid       = r2.uuid;
+                        r.pathOffset = r2.pathOffset;
+                        r.pathSize   = r2.pathSize;
+                        out.registry.push_back(r);
+                    }
+                }
+                else
+                {
+                    out.registry.resize(static_cast<size_t>(out.header.registryCount));
+                    if (!readAt(out.header.registryOffset,
+                                out.registry.data(),
+                                static_cast<size_t>(out.header.registrySize)))
+                        return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
+                }
+            }
+
+            for (uint32_t i = 0; i < static_cast<uint32_t>(out.entries.size()); ++i)
+                out.buckets[out.entries[i].pathHash64].push_back(i);
+
+            return vbase::Result<VpkReadOnly, AssetError>::ok(std::move(out));
+        }
+
+        // Decompress (or copy) a packed entry payload into its raw bytes.
+        vbase::Result<std::vector<std::byte>, AssetError> unpackEntry(const VpkEntry& e, std::vector<std::byte> packed)
+        {
+            if (e.compression == VpkCompression::eNone)
+                return vbase::Result<std::vector<std::byte>, AssetError>::ok(std::move(packed));
+
+            if (e.compression != VpkCompression::eZstd)
+                return vbase::Result<std::vector<std::byte>, AssetError>::err(AssetError::eNotSupported);
+
+            std::vector<std::byte> raw;
+            raw.resize(static_cast<size_t>(e.rawSize));
+
+            const size_t r = ZSTD_decompress(raw.data(), raw.size(), packed.data(), packed.size());
+            if (ZSTD_isError(r) || r != raw.size())
+                return vbase::Result<std::vector<std::byte>, AssetError>::err(AssetError::eInvalidFormat);
+
+            return vbase::Result<std::vector<std::byte>, AssetError>::ok(std::move(raw));
+        }
+    } // namespace
+
     vbase::Result<VpkReadOnly, AssetError> openVpk(vbase::StringView vpkPath)
     {
         std::ifstream f(std::string(vpkPath), std::ios::binary);
         if (!f)
             return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eNotFound);
 
-        VpkReadOnly out {};
+        return parseVpk([&f](uint64_t offset, void* dst, size_t n) -> bool {
+            f.clear();
+            f.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            f.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n));
+            return static_cast<bool>(f);
+        });
+    }
 
-        // Read header version first
-        char     magic[4] = {};
-        uint32_t version  = 0;
-
-        f.read(magic, 4);
-        f.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
-        if (!f)
-            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-        if (std::memcmp(magic, "VPK\0", 4) != 0)
-            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-        f.seekg(0, std::ios::beg);
-
-        if (version == 1)
-        {
-            VpkHeaderV1 h1 {};
-            f.read(reinterpret_cast<char*>(&h1), sizeof(VpkHeaderV1));
-            if (!f)
-                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-            std::memcpy(out.header.magic, h1.magic, 4);
-            out.header.version      = h1.version;
-            out.header.flags        = h1.flags;
-            out.header.fileCount    = h1.fileCount;
-            out.header.indexOffset  = h1.indexOffset;
-            out.header.indexSize    = h1.indexSize;
-            out.header.stringOffset = h1.stringOffset;
-            out.header.stringSize   = h1.stringSize;
-            out.header.dataOffset   = h1.dataOffset;
-
-            out.header.registryOffset = 0;
-            out.header.registrySize   = 0;
-            out.header.registryCount  = 0;
-        }
-        else if (version == 2 || version == VPK_VERSION)
-        {
-            f.read(reinterpret_cast<char*>(&out.header), sizeof(VpkHeader));
-            if (!f)
-                return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-        }
-        else
-        {
-            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-        }
-
-        // Read index
-        out.entries.resize(out.header.fileCount);
-
-        f.seekg(static_cast<std::streamoff>(out.header.indexOffset), std::ios::beg);
-        f.read(reinterpret_cast<char*>(out.entries.data()), static_cast<std::streamsize>(out.header.indexSize));
-        if (!f)
-            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-        // Read string table
-        out.stringTable.resize(static_cast<size_t>(out.header.stringSize));
-        f.seekg(static_cast<std::streamoff>(out.header.stringOffset), std::ios::beg);
-        f.read(out.stringTable.data(), static_cast<std::streamsize>(out.header.stringSize));
-        if (!f)
-            return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-        // Read registry (v2+)
-        if (out.header.registryCount > 0 && out.header.registrySize > 0)
-        {
-            f.seekg(static_cast<std::streamoff>(out.header.registryOffset), std::ios::beg);
-            if (version == 2)
-            {
-                std::vector<VpkAssetRegistryEntryV2> registryV2;
-                registryV2.resize(static_cast<size_t>(out.header.registryCount));
-                f.read(reinterpret_cast<char*>(registryV2.data()), static_cast<std::streamsize>(out.header.registrySize));
-                if (!f)
-                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-
-                out.registry.reserve(registryV2.size());
-                for (const auto& r2 : registryV2)
-                {
-                    VpkAssetRegistryEntry r {};
-                    r.uuid       = r2.uuid;
-                    r.pathOffset = r2.pathOffset;
-                    r.pathSize   = r2.pathSize;
-                    out.registry.push_back(r);
-                }
-            }
-            else
-            {
-                out.registry.resize(static_cast<size_t>(out.header.registryCount));
-                f.read(reinterpret_cast<char*>(out.registry.data()), static_cast<std::streamsize>(out.header.registrySize));
-                if (!f)
-                    return vbase::Result<VpkReadOnly, AssetError>::err(AssetError::eInvalidFormat);
-            }
-        }
-
-        // Build buckets
-        for (uint32_t i = 0; i < static_cast<uint32_t>(out.entries.size()); ++i)
-            out.buckets[out.entries[i].pathHash64].push_back(i);
-
-        return vbase::Result<VpkReadOnly, AssetError>::ok(std::move(out));
+    vbase::Result<VpkReadOnly, AssetError> openVpkFromMemory(vbase::ConstByteSpan blob)
+    {
+        return parseVpk([blob](uint64_t offset, void* dst, size_t n) -> bool {
+            if (offset > blob.size() || n > blob.size() - offset)
+                return false;
+            std::memcpy(dst, blob.data() + offset, n);
+            return true;
+        });
     }
 
     static vbase::Result<const VpkEntry*, AssetError> find_entry(const VpkReadOnly& vpk, std::string_view logicalPath)
@@ -219,20 +254,30 @@ namespace vasset
                 return vbase::Result<std::vector<std::byte>, AssetError>::err(AssetError::eIOError);
         }
 
-        if (e.compression == VpkCompression::eNone)
-            return vbase::Result<std::vector<std::byte>, AssetError>::ok(std::move(packed));
+        return unpackEntry(e, std::move(packed));
+    }
 
-        if (e.compression != VpkCompression::eZstd)
-            return vbase::Result<std::vector<std::byte>, AssetError>::err(AssetError::eNotSupported);
+    vbase::Result<std::vector<std::byte>, AssetError>
+    readVpkFileFromMemory(const VpkReadOnly& vpk, vbase::ConstByteSpan blob, vbase::StringView logicalPath)
+    {
+        if (!logicalPath.empty() && logicalPath.front() == '/')
+            logicalPath.remove_prefix(1);
 
-        std::vector<std::byte> raw;
-        raw.resize(static_cast<size_t>(e.rawSize));
+        auto fe = find_entry(vpk, std::string_view(logicalPath.data(), logicalPath.size()));
+        if (!fe)
+            return vbase::Result<std::vector<std::byte>, AssetError>::err(fe.error());
 
-        const size_t r = ZSTD_decompress(raw.data(), raw.size(), packed.data(), packed.size());
-        if (ZSTD_isError(r) || r != raw.size())
+        const VpkEntry& e = *fe.value();
+
+        if (e.dataOffset > blob.size() || e.packedSize > blob.size() - e.dataOffset)
             return vbase::Result<std::vector<std::byte>, AssetError>::err(AssetError::eInvalidFormat);
 
-        return vbase::Result<std::vector<std::byte>, AssetError>::ok(std::move(raw));
+        std::vector<std::byte> packed;
+        packed.resize(static_cast<size_t>(e.packedSize));
+        if (e.packedSize > 0)
+            std::memcpy(packed.data(), blob.data() + e.dataOffset, static_cast<size_t>(e.packedSize));
+
+        return unpackEntry(e, std::move(packed));
     }
 
     vbase::Result<void, AssetError>

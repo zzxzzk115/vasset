@@ -87,9 +87,16 @@ namespace vasset
     // Open and parse a VPK file.
     vbase::Result<VpkReadOnly, AssetError> openVpk(vbase::StringView vpkPath);
 
+    // Open and parse a VPK from an in-memory blob (e.g. a binary embedded into the executable).
+    vbase::Result<VpkReadOnly, AssetError> openVpkFromMemory(vbase::ConstByteSpan blob);
+
     // Read an entry payload by logical path.
     vbase::Result<std::vector<std::byte>, AssetError>
     readVpkFile(const VpkReadOnly& vpk, vbase::StringView vpkPath, vbase::StringView logicalPath);
+
+    // Read an entry payload from an in-memory VPK blob.
+    vbase::Result<std::vector<std::byte>, AssetError>
+    readVpkFileFromMemory(const VpkReadOnly& vpk, vbase::ConstByteSpan blob, vbase::StringView logicalPath);
 
     // Writer input: already-prepared cooked bytes for each logical path.
     struct VpkWriteItem
@@ -105,11 +112,15 @@ namespace vasset
     vbase::Result<void, AssetError>
     writeVpk(vbase::StringView outPath, const std::vector<VpkWriteItem>& items, int zstdLevel);
 
-    // A filesystem view over a VPK file.
+    // A filesystem view over a VPK file (on disk) or an in-memory VPK blob (embedded).
     class VpkFileSystem final : public vfilesystem::IFileSystem
     {
     public:
         explicit VpkFileSystem(std::string vpkPath);
+
+        // Construct over an in-memory VPK image. The blob is copied and owned, so the
+        // source bytes need not outlive the filesystem. Use this for embedded packs.
+        explicit VpkFileSystem(std::vector<std::byte> blob);
 
         vbase::Result<void, AssetError> openPackage();
 
@@ -123,9 +134,11 @@ namespace vasset
         const VpkReadOnly& getVpk() const { return m_Pkg; }
 
     private:
-        std::string m_Path;
-        VpkReadOnly m_Pkg;
-        bool        m_Ready {false};
+        std::string            m_Path;
+        std::vector<std::byte> m_Blob;   // populated when constructed from memory
+        bool                   m_Memory {false};
+        VpkReadOnly            m_Pkg;
+        bool                   m_Ready {false};
     };
 
 } // namespace vasset

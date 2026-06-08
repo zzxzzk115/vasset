@@ -55,9 +55,11 @@ namespace vasset
 
     VpkFileSystem::VpkFileSystem(std::string vpkPath) : m_Path(std::move(vpkPath)) {}
 
+    VpkFileSystem::VpkFileSystem(std::vector<std::byte> blob) : m_Blob(std::move(blob)), m_Memory(true) {}
+
     vbase::Result<void, AssetError> VpkFileSystem::openPackage()
     {
-        auto r = openVpk(m_Path);
+        auto r = m_Memory ? openVpkFromMemory(vbase::ConstByteSpan {m_Blob.data(), m_Blob.size()}) : openVpk(m_Path);
         if (!r)
             return vbase::Result<void, AssetError>::err(r.error());
         m_Pkg   = std::move(r.value());
@@ -69,7 +71,8 @@ namespace vasset
     {
         if (!m_Ready)
             return false;
-        auto r = readVpkFile(m_Pkg, m_Path, p);
+        auto r = m_Memory ? readVpkFileFromMemory(m_Pkg, vbase::ConstByteSpan {m_Blob.data(), m_Blob.size()}, p) :
+                            readVpkFile(m_Pkg, m_Path, p);
         return static_cast<bool>(r);
     }
 
@@ -88,7 +91,8 @@ namespace vasset
             return vbase::Result<std::unique_ptr<vfilesystem::IFile>, vfilesystem::FsError>::err(
                 vfilesystem::FsError::eIOError);
 
-        auto r = readVpkFile(m_Pkg, m_Path, p);
+        auto r = m_Memory ? readVpkFileFromMemory(m_Pkg, vbase::ConstByteSpan {m_Blob.data(), m_Blob.size()}, p) :
+                            readVpkFile(m_Pkg, m_Path, p);
         if (!r)
         {
             if (r.error() == AssetError::eNotFound)
