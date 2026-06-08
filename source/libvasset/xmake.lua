@@ -46,6 +46,7 @@ local import_headers = {
     "include/(vasset/vasset_pack.hpp)",
     "include/(vasset/tool_cli.hpp)",
     "include/(vasset/texture_import_params.hpp)",
+    "include/(vasset/mesh_import_params.hpp)",
     "include/(vasset/vimport.hpp)",
 }
 
@@ -85,7 +86,7 @@ if enable_import_targets then
         end
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
-        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
+        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", "ozz-animation", "vshadersystem", { public = true })
         if is_mode("debug") then

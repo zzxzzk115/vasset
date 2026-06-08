@@ -206,19 +206,37 @@ namespace vasset
                                   const VTextureImporter::ImportOptions&      options)
     {
         eraseKnownTextureParams(existing);
-        existing[std::string(kTextureParamSubtype)]                 = subtype.empty() ? std::string(kTextureSubtypeDefault) : std::string(subtype);
-        existing[std::string(kTextureParamGenerateMipmaps)]         = boolParam(options.generateMipmaps);
-        existing[std::string(kTextureParamFlipY)]                   = boolParam(options.flipY);
-        existing[std::string(kTextureParamTargetFormat)]            = textureFileFormatToParam(options.targetTextureFileFormat);
-        existing[std::string(kTextureParamUastc)]                   = boolParam(options.uastc);
-        existing[std::string(kTextureParamQualityLevel)]            = std::to_string(options.qualityLevel);
-        existing[std::string(kTextureParamCompressionLevel)]        = std::to_string(options.compressionLevel);
-        existing[std::string(kTextureParamCompressOnlyLarge)]       = boolParam(options.compressOnlyLargeTextures);
-        existing[std::string(kTextureParamDownscaleLarge)]          = boolParam(options.downscaleLargeTextures);
-        existing[std::string(kTextureParamDownscaleMinDimension)]   = std::to_string(options.downscaleMinDimension);
-        existing[std::string(kTextureParamDownscaleTargetDimension)] = std::to_string(options.downscaleTargetDimension);
-        existing[std::string(kTextureParamBakeNormalMap)]           = boolParam(options.bakeNormalMap);
-        existing[std::string(kTextureParamDirectXNormalMap)]        = boolParam(options.directXNormalMap);
+
+        const std::string sub = subtype.empty() ? std::string(kTextureSubtypeDefault) : std::string(subtype);
+        // Only persist fields that differ from the subtype's canonical defaults. resolve fills the
+        // rest back in from the same baseline, so an all-default asset writes a near-empty [params].
+        const auto baseline = textureImportOptionsForSubtype(sub, {});
+
+        if (sub != std::string(kTextureSubtypeDefault))
+            existing[std::string(kTextureParamSubtype)] = sub;
+
+        const auto setBool = [&](std::string_view key, bool v, bool def) {
+            if (v != def)
+                existing[std::string(key)] = boolParam(v);
+        };
+        const auto setU32 = [&](std::string_view key, uint32_t v, uint32_t def) {
+            if (v != def)
+                existing[std::string(key)] = std::to_string(v);
+        };
+
+        setBool(kTextureParamGenerateMipmaps, options.generateMipmaps, baseline.generateMipmaps);
+        setBool(kTextureParamFlipY, options.flipY, baseline.flipY);
+        if (options.targetTextureFileFormat != baseline.targetTextureFileFormat)
+            existing[std::string(kTextureParamTargetFormat)] = textureFileFormatToParam(options.targetTextureFileFormat);
+        setBool(kTextureParamUastc, options.uastc, baseline.uastc);
+        setU32(kTextureParamQualityLevel, options.qualityLevel, baseline.qualityLevel);
+        setU32(kTextureParamCompressionLevel, options.compressionLevel, baseline.compressionLevel);
+        setBool(kTextureParamCompressOnlyLarge, options.compressOnlyLargeTextures, baseline.compressOnlyLargeTextures);
+        setBool(kTextureParamDownscaleLarge, options.downscaleLargeTextures, baseline.downscaleLargeTextures);
+        setU32(kTextureParamDownscaleMinDimension, options.downscaleMinDimension, baseline.downscaleMinDimension);
+        setU32(kTextureParamDownscaleTargetDimension, options.downscaleTargetDimension, baseline.downscaleTargetDimension);
+        setBool(kTextureParamBakeNormalMap, options.bakeNormalMap, baseline.bakeNormalMap);
+        setBool(kTextureParamDirectXNormalMap, options.directXNormalMap, baseline.directXNormalMap);
         return existing;
     }
 

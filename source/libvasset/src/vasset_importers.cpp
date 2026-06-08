@@ -2,6 +2,7 @@
 #include "vasset/vasset_import_database.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
+#include "vasset/mesh_import_params.hpp"
 #include "vasset/texture_import_params.hpp"
 #include "vasset/vanimation.hpp"
 #include "vasset/vgaussiansplat.hpp"
@@ -1094,11 +1095,32 @@ namespace
     uint64_t meshImportParamsHash(const vasset::VMeshImporter::ImportOptions& options)
     {
         uint64_t h = hashString("mesh-params");
+        h = hashU64(options.calcTangentSpace ? 1u : 0u, h);
+        h = hashU64(options.genSmoothNormals ? 1u : 0u, h);
+        h = hashU64(options.genUVCoords ? 1u : 0u, h);
+        h = hashU64(options.flipUVs ? 1u : 0u, h);
+        h = hashU64(options.preTransformVertices ? 1u : 0u, h);
         h = hashU64(options.generateMeshlets ? 1u : 0u, h);
         h = hashU64(options.optimizeVertexCache ? 1u : 0u, h);
         h = hashU64(options.optimizeOverdraw ? 1u : 0u, h);
         h = hashU64(options.optimizeVertexFetch ? 1u : 0u, h);
         return h;
+    }
+
+    // Build the assimp post-process flag set from per-asset mesh options. Triangulate is always
+    // applied (the renderer requires triangles); pre-transform is added by the single-mesh path.
+    unsigned int meshAssimpBaseFlags(const vasset::VMeshImporter::ImportOptions& o)
+    {
+        unsigned int f = aiProcess_Triangulate;
+        if (o.flipUVs)
+            f |= aiProcess_FlipUVs;
+        if (o.calcTangentSpace)
+            f |= aiProcess_CalcTangentSpace;
+        if (o.genSmoothNormals)
+            f |= aiProcess_GenSmoothNormals;
+        if (o.genUVCoords)
+            f |= aiProcess_GenUVCoords;
+        return f;
     }
 
     std::string sanitizeAssetSegment(std::string value)
@@ -3518,7 +3540,17 @@ namespace vasset
 
         const uint64_t sourceHash = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
-        const uint64_t paramsHash = meshImportParamsHash(m_Options);
+
+        // Per-asset mesh import options from the model's source .vimport (sparse; resolve fills defaults).
+        VImport modelSourceVImport {};
+        {
+            auto sidecar = osPath;
+            sidecar.replace_extension(".vimport");
+            if (auto loaded = loadVImport(sidecar.generic_string()))
+                modelSourceVImport = std::move(loaded.value());
+        }
+        const VMeshImporter::ImportOptions opts = resolveMeshImportParams(modelSourceVImport.params, m_Options);
+        const uint64_t paramsHash = meshImportParamsHash(opts);
         constexpr auto importerVersion = "model_prefab:1";
         constexpr auto outputSchema = "vmanifest:1+vmesh:5+vskel:1+vanim:1+default_transform:1+node_transform:1";
 
@@ -3583,10 +3615,7 @@ namespace vasset
 
         m_FilePath = filePath;
 
-        const unsigned int flags = assimpImportFlagsForSource(aiProcess_Triangulate | aiProcess_FlipUVs |
-                                                                  aiProcess_CalcTangentSpace |
-                                                                  aiProcess_GenSmoothNormals | aiProcess_GenUVCoords,
-                                                              osPath);
+        const unsigned int flags = assimpImportFlagsForSource(meshAssimpBaseFlags(opts), osPath);
 
         Assimp::Importer importer {};
         configureAssimpImporterForSource(importer, osPath);
@@ -3888,8 +3917,8 @@ namespace vasset
             const auto      nodeTransform =
                 decomposeDefaultTransform(transformWithLocalPivot(defaultTransform, localPivot), nodeMesh);
 
-            optimizeMeshIndices(nodeMesh, m_Options);
-            if (m_Options.generateMeshlets)
+            optimizeMeshIndices(nodeMesh, opts);
+            if (opts.generateMeshlets)
                 generateMeshlets(nodeMesh);
             finalizeMeshVertexFlags(nodeMesh);
             updateMeshLocalBounds(nodeMesh);
@@ -3998,6 +4027,9 @@ namespace vasset
         vimport.uid = manifestUUID;
         vimport.source = relativeSrcPath;
         vimport.output = relativeManifestPath;
+        // Persist only non-default mesh import options on the model's source sidecar (read/written
+        // by the editor's mesh import inspector).
+        vimport.params = normalizedMeshImportParams(std::move(modelSourceVImport.params), opts);
         auto importSidecarPath = osPath;
         auto srImport = saveVImport(vimport, importSidecarPath.replace_extension(".vimport").generic_string());
         if (!srImport)
@@ -4047,7 +4079,17 @@ namespace vasset
         auto lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
         const uint64_t sourceHash     = hashFile(osPath);
         constexpr uint64_t dependencyHash = 0;
-        const uint64_t paramsHash     = meshImportParamsHash(m_Options);
+
+        // Per-asset mesh import options from the source .vimport (sparse; resolve fills defaults).
+        VImport meshSourceVImport {};
+        {
+            auto sidecar = osPath;
+            sidecar.replace_extension(".vimport");
+            if (auto loaded = loadVImport(sidecar.generic_string()))
+                meshSourceVImport = std::move(loaded.value());
+        }
+        const VMeshImporter::ImportOptions opts = resolveMeshImportParams(meshSourceVImport.params, m_Options);
+        const uint64_t paramsHash     = meshImportParamsHash(opts);
         constexpr auto importerVersion = "mesh:1";
         constexpr auto outputSchema = "vmesh:5";
 
@@ -4090,11 +4132,8 @@ namespace vasset
 
         // Set Assimp process flags
         // Ignore scene graph, as we flatten everything into a single VMesh
-        unsigned int flags = assimpImportFlagsForSource(aiProcess_Triangulate | aiProcess_FlipUVs |
-                                                            aiProcess_PreTransformVertices |
-                                                            aiProcess_CalcTangentSpace |
-                                                            aiProcess_GenSmoothNormals | aiProcess_GenUVCoords,
-                                                        osPath);
+        unsigned int flags = assimpImportFlagsForSource(
+            meshAssimpBaseFlags(opts) | (opts.preTransformVertices ? aiProcess_PreTransformVertices : 0u), osPath);
 
         Assimp::Importer importer {};
         configureAssimpImporterForSource(importer, osPath);
@@ -4109,10 +4148,10 @@ namespace vasset
         // Process the scene
         processNode(scene->mRootNode, scene, outMesh);
 
-        optimizeMeshIndices(outMesh, m_Options);
+        optimizeMeshIndices(outMesh, opts);
 
         // Generate meshlets if enabled
-        if (m_Options.generateMeshlets)
+        if (opts.generateMeshlets)
         {
             generateMeshlets(outMesh);
         }
@@ -4131,12 +4170,13 @@ namespace vasset
             return vbase::Result<vbase::UUID, AssetError>::err(sr_mesh.error());
         }
 
-        // Save VImport
+        // Save VImport (persist only non-default mesh options).
         VImport vimport {};
         vimport.importer = toString(VAssetType::eMesh);
         vimport.uid      = outMesh.uuid;
         vimport.source   = relativeSrcPath;
         vimport.output   = relativeImportedPath;
+        vimport.params   = normalizedMeshImportParams(std::move(meshSourceVImport.params), opts);
         auto sr_import = saveVImport(vimport, osPath.replace_extension(".vimport").generic_string());
         if (!sr_import)
             return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());

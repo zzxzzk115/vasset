@@ -73,7 +73,17 @@ namespace vasset
     public:
         struct ImportOptions
         {
+            // Assimp post-process options (exposed in the editor). Defaults reproduce the
+            // previously-hardcoded behavior. Triangulate is always applied (not optional).
+            bool calcTangentSpace {true};     // aiProcess_CalcTangentSpace (tangents + bitangents)
+            bool genSmoothNormals {true};     // aiProcess_GenSmoothNormals
+            bool genUVCoords {true};          // aiProcess_GenUVCoords
+            bool flipUVs {true};              // aiProcess_FlipUVs
+            bool preTransformVertices {true}; // aiProcess_PreTransformVertices (single-mesh flatten)
+
             bool generateMeshlets {true};
+
+            // meshoptimizer reorder passes (kept at defaults; not surfaced in the editor UI).
             bool optimizeVertexCache {true};
             bool optimizeOverdraw {true};
             bool optimizeVertexFetch {true};
