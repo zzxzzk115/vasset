@@ -226,6 +226,7 @@ namespace
         {
             case vasset::VAssetType::eScene:
             case vasset::VAssetType::eSceneManifest:
+            case vasset::VAssetType::ePrefab:
                 return vasset::VAssetDependencyKind::eSceneComponent;
             case vasset::VAssetType::eRenderGraphJson:
                 return vasset::VAssetDependencyKind::eRenderGraphFeature;
@@ -449,6 +450,8 @@ namespace
     bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
 
     bool isValidSceneManifest(vbase::StringView ext) { return ext == ".vmanifest"; }
+
+    bool isValidPrefab(vbase::StringView ext) { return ext == ".vprefab"; }
 
     class OzzMemoryStream final : public ozz::io::Stream
     {
@@ -916,8 +919,9 @@ namespace
     bool isValidSourceTextAsset(const std::filesystem::path& path)
     {
         const auto ext = path.extension().generic_string();
-        return isValidScene(ext) || isValidSceneManifest(ext) || isValidScriptLua(ext) || isValidRenderGraphJson(path) ||
-               isValidMaterialGraphJson(path) || isValidAnimatorGraphJson(path) || isValidMaterialJson(path);
+        return isValidScene(ext) || isValidSceneManifest(ext) || isValidPrefab(ext) || isValidScriptLua(ext) ||
+               isValidRenderGraphJson(path) || isValidMaterialGraphJson(path) || isValidAnimatorGraphJson(path) ||
+               isValidMaterialJson(path);
     }
 
     bool isPathUnderDirectory(const std::string& relPath, const std::string& dir)
@@ -1996,6 +2000,8 @@ namespace
             return vasset::VAssetType::eScene;
         if (ext == ".vmanifest")
             return vasset::VAssetType::eSceneManifest;
+        if (ext == ".vprefab")
+            return vasset::VAssetType::ePrefab;
         if (ext == ".lua")
             return vasset::VAssetType::eScriptLua;
         return vasset::VAssetType::eUnknown;

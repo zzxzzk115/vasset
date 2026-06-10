@@ -109,7 +109,7 @@ namespace
             return static_cast<char>(std::tolower(ch));
         });
 
-        return ext == ".vscn" || ext == ".vmanifest" || ext == ".lua";
+        return ext == ".vscn" || ext == ".vmanifest" || ext == ".vprefab" || ext == ".lua";
     }
 
     bool shouldPackSourcePayloadForEntry(const VAssetRegistry::AssetEntry& entry)
@@ -122,6 +122,7 @@ namespace
 
         return (entry.type == VAssetType::eScene && ext == ".vscn") ||
                (entry.type == VAssetType::eSceneManifest && ext == ".vmanifest") ||
+               (entry.type == VAssetType::ePrefab && ext == ".vprefab") ||
                (entry.type == VAssetType::eScriptLua && ext == ".lua");
     }
 
@@ -137,6 +138,8 @@ namespace
             return VAssetType::eScene;
         if (ext == ".vmanifest")
             return VAssetType::eSceneManifest;
+        if (ext == ".vprefab")
+            return VAssetType::ePrefab;
         if (ext == ".lua")
             return VAssetType::eScriptLua;
         return VAssetType::eUnknown;

@@ -91,8 +91,8 @@ namespace vasset
             // Native plugin libraries are packed as raw payloads (extracted + loaded at runtime).
             // They are only included when listed as a pack root (reachability gate), so a stray
             // library elsewhere under the asset root is never bundled.
-            return ext == ".vscn" || ext == ".vmanifest" || ext == ".lua" || ext == ".dll" || ext == ".so" ||
-                   ext == ".dylib";
+            return ext == ".vscn" || ext == ".vmanifest" || ext == ".vprefab" || ext == ".lua" || ext == ".dll" ||
+                   ext == ".so" || ext == ".dylib";
         }
 
         bool shouldPackSourcePayloadForEntry(const VAssetRegistry::AssetEntry& entry)
@@ -105,6 +105,7 @@ namespace vasset
 
             return (entry.type == VAssetType::eScene && ext == ".vscn") ||
                    (entry.type == VAssetType::eSceneManifest && ext == ".vmanifest") ||
+                   (entry.type == VAssetType::ePrefab && ext == ".vprefab") ||
                    (entry.type == VAssetType::eScriptLua && ext == ".lua");
         }
 
@@ -120,6 +121,8 @@ namespace vasset
                 return VAssetType::eScene;
             if (ext == ".vmanifest")
                 return VAssetType::eSceneManifest;
+            if (ext == ".vprefab")
+                return VAssetType::ePrefab;
             if (ext == ".lua")
                 return VAssetType::eScriptLua;
             return VAssetType::eUnknown;

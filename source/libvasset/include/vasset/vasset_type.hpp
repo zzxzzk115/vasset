@@ -24,6 +24,7 @@ namespace vasset
         eAnimatorGraphJson,
         eShaderLibraryManifest,
         eShaderLibrary,
+        ePrefab,
     };
 
     inline std::string toString(VAssetType type)
@@ -60,6 +61,8 @@ namespace vasset
                 return "shader_library_manifest";
             case VAssetType::eShaderLibrary:
                 return "shader_library";
+            case VAssetType::ePrefab:
+                return "prefab";
             case VAssetType::eUnknown:
             default:
                 return "unknown";
@@ -127,6 +130,10 @@ namespace vasset
         else if (typeStr == "shader_library")
         {
             return VAssetType::eShaderLibrary;
+        }
+        else if (typeStr == "prefab")
+        {
+            return VAssetType::ePrefab;
         }
         else
         {
