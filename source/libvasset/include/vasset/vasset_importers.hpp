@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vasset/asset_error.hpp"
+#include "vasset/vaudio.hpp"
 #include "vasset/vgaussiansplat.hpp"
 #include "vasset/vmesh.hpp"
 #include "vbase/core/uuid.hpp"
@@ -124,6 +125,38 @@ namespace vasset
         mutable size_t m_ModelProgressTotal {0};
     };
 
+    class VAudioImporter
+    {
+    public:
+        struct ImportOptions
+        {
+            // Cooked payload layout. Passthrough keeps the original encoded bytes for
+            // the runtime decoder; PCM decodes (and optionally resamples/folds) at
+            // import. Ogg sources are always forced to PCM (no runtime vorbis decoder).
+            VAudioStorage storage {VAudioStorage::ePCM16};
+
+            uint32_t targetSampleRate {0}; // 0 = keep source rate (PCM storage only)
+            bool     forceMono {false};    // fold to mono (PCM storage only)
+            bool     normalize {false};    // peak-normalize samples (PCM storage only)
+
+            // Reserved for future lossy re-encode (needs a Vorbis/Opus encoder; v1
+            // has no encoder, so these only participate in hashing/persistence).
+            uint32_t bitrateKbps {0};
+            uint32_t quality {5};
+        };
+
+        VAudioImporter(VAssetRegistry& registry);
+
+        VAudioImporter& setOptions(const ImportOptions& options);
+
+        vbase::Result<vbase::UUID, AssetError>
+        importAudio(vbase::StringView filePath, VAudio& outAudio, bool forceReimport = false) const;
+
+    private:
+        VAssetRegistry& m_Registry;
+        ImportOptions   m_Options;
+    };
+
     class VGaussianSplatImporter
     {
     public:
@@ -196,12 +229,14 @@ namespace vasset
         VMeshImporter&          getMeshImporter() { return m_MeshImporter; }
         VTextureImporter&       getTextureImporter() { return m_TextureImporter; }
         VGaussianSplatImporter& getGaussianSplatImporter() { return m_GaussianSplatImporter; }
+        VAudioImporter&         getAudioImporter() { return m_AudioImporter; }
 
     private:
         VAssetRegistry&        m_Registry;
         VMeshImporter          m_MeshImporter;
         VTextureImporter       m_TextureImporter;
         VGaussianSplatImporter m_GaussianSplatImporter;
+        VAudioImporter         m_AudioImporter;
         ImportOptions          m_Options;
     };
 } // namespace vasset

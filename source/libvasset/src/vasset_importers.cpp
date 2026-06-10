@@ -2,9 +2,11 @@
 #include "vasset/vasset_import_database.hpp"
 #include "vasset/vasset_registry.hpp"
 #include "vasset/vasset_type.hpp"
+#include "vasset/audio_import_params.hpp"
 #include "vasset/mesh_import_params.hpp"
 #include "vasset/texture_import_params.hpp"
 #include "vasset/vanimation.hpp"
+#include "vasset/vaudio.hpp"
 #include "vasset/vgaussiansplat.hpp"
 #include "vasset/vimport.hpp"
 
@@ -25,6 +27,13 @@
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb/stb_image_resize2.h>
+
+// Declarations only; the implementation TU is src/stb_vorbis_impl.cpp.
+#define STB_VORBIS_HEADER_ONLY
+#include <stb/stb_vorbis.c>
+#undef STB_VORBIS_HEADER_ONLY
+
+#include <miniaudio.h>
 
 #define DDSKTX_IMPLEMENT
 #include <dds-ktx.h>
@@ -445,6 +454,11 @@ namespace
     bool isValidGaussianSplat(vbase::StringView ext)
     {
         return ext == ".ply" || ext == ".spz" || ext == ".splat" || ext == ".ksplat";
+    }
+
+    bool isValidAudio(vbase::StringView ext)
+    {
+        return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg";
     }
 
     bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
@@ -1108,6 +1122,18 @@ namespace
         h = hashU64(options.optimizeVertexCache ? 1u : 0u, h);
         h = hashU64(options.optimizeOverdraw ? 1u : 0u, h);
         h = hashU64(options.optimizeVertexFetch ? 1u : 0u, h);
+        return h;
+    }
+
+    uint64_t audioImportParamsHash(const vasset::VAudioImporter::ImportOptions& options)
+    {
+        uint64_t h = hashString("audio-params");
+        h = hashU64(static_cast<uint64_t>(options.storage), h);
+        h = hashU64(options.targetSampleRate, h);
+        h = hashU64(options.forceMono ? 1u : 0u, h);
+        h = hashU64(options.normalize ? 1u : 0u, h);
+        h = hashU64(options.bitrateKbps, h);
+        h = hashU64(options.quality, h);
         return h;
     }
 
@@ -5126,6 +5152,370 @@ namespace vasset
 
     // ─── VGaussianSplatImporter ──────────────────────────────────────────────────
 
+    namespace
+    {
+        // Peak-normalize interleaved PCM in place. No-op on silence.
+        void normalizePcm16(std::vector<std::byte>& data)
+        {
+            auto*        samples = reinterpret_cast<int16_t*>(data.data());
+            const size_t count   = data.size() / sizeof(int16_t);
+            int32_t      peak    = 0;
+            for (size_t i = 0; i < count; ++i)
+                peak = std::max(peak, std::abs(static_cast<int32_t>(samples[i])));
+            if (peak == 0 || peak >= 32767)
+                return;
+            const float scale = 32767.0f / static_cast<float>(peak);
+            for (size_t i = 0; i < count; ++i)
+            {
+                const float v = static_cast<float>(samples[i]) * scale;
+                samples[i] = static_cast<int16_t>(std::clamp(v, -32768.0f, 32767.0f));
+            }
+        }
+
+        void normalizePcmF32(std::vector<std::byte>& data)
+        {
+            auto*        samples = reinterpret_cast<float*>(data.data());
+            const size_t count   = data.size() / sizeof(float);
+            float        peak    = 0.0f;
+            for (size_t i = 0; i < count; ++i)
+                peak = std::max(peak, std::abs(samples[i]));
+            if (peak <= 0.0f || peak >= 1.0f)
+                return;
+            const float scale = 1.0f / peak;
+            for (size_t i = 0; i < count; ++i)
+                samples[i] *= scale;
+        }
+
+        // Convert interleaved PCM between format/channels/rate with ma_data_converter.
+        // Returns the converted buffer and frame count, or false on failure.
+        bool convertPcmFrames(const void*             srcFrames,
+                              uint64_t                srcFrameCount,
+                              ma_format               srcFormat,
+                              uint32_t                srcChannels,
+                              uint32_t                srcRate,
+                              ma_format               dstFormat,
+                              uint32_t                dstChannels,
+                              uint32_t                dstRate,
+                              std::vector<std::byte>& outData,
+                              uint64_t&               outFrameCount)
+        {
+            ma_data_converter_config config =
+                ma_data_converter_config_init(srcFormat, dstFormat, srcChannels, dstChannels, srcRate, dstRate);
+            ma_data_converter converter;
+            if (ma_data_converter_init(&config, nullptr, &converter) != MA_SUCCESS)
+                return false;
+
+            ma_uint64 expectedFrames = 0;
+            if (ma_data_converter_get_expected_output_frame_count(&converter, srcFrameCount, &expectedFrames) !=
+                MA_SUCCESS)
+            {
+                ma_data_converter_uninit(&converter, nullptr);
+                return false;
+            }
+
+            const size_t dstBpf = ma_get_bytes_per_frame(dstFormat, dstChannels);
+            const size_t srcBpf = ma_get_bytes_per_frame(srcFormat, srcChannels);
+            // Headroom for resampler tail frames.
+            outData.resize(static_cast<size_t>(expectedFrames + 64) * dstBpf);
+
+            ma_uint64 totalIn  = 0;
+            ma_uint64 totalOut = 0;
+            for (;;)
+            {
+                ma_uint64 inFrames  = srcFrameCount - totalIn;
+                ma_uint64 outFrames = (outData.size() / dstBpf) - totalOut;
+                if (outFrames == 0)
+                {
+                    outData.resize(outData.size() + 4096 * dstBpf);
+                    outFrames = (outData.size() / dstBpf) - totalOut;
+                }
+                const auto* in  = static_cast<const uint8_t*>(srcFrames) + totalIn * srcBpf;
+                auto*       out = reinterpret_cast<uint8_t*>(outData.data()) + totalOut * dstBpf;
+                if (ma_data_converter_process_pcm_frames(
+                        &converter, inFrames != 0 ? in : nullptr, &inFrames, out, &outFrames) != MA_SUCCESS)
+                {
+                    ma_data_converter_uninit(&converter, nullptr);
+                    return false;
+                }
+                totalIn += inFrames;
+                totalOut += outFrames;
+                // Keep draining with empty input until the resampler tail is flushed.
+                if (inFrames == 0 && outFrames == 0)
+                {
+                    if (totalIn >= srcFrameCount)
+                        break;
+                    ma_data_converter_uninit(&converter, nullptr);
+                    return false; // converter stalled mid-stream
+                }
+            }
+            ma_data_converter_uninit(&converter, nullptr);
+
+            outData.resize(static_cast<size_t>(totalOut) * dstBpf);
+            outFrameCount = totalOut;
+            return true;
+        }
+    } // namespace
+
+    VAudioImporter::VAudioImporter(VAssetRegistry& registry) : m_Registry(registry) {}
+
+    VAudioImporter& VAudioImporter::setOptions(const ImportOptions& options)
+    {
+        m_Options = options;
+        return *this;
+    }
+
+    vbase::Result<vbase::UUID, AssetError>
+    VAudioImporter::importAudio(vbase::StringView filePath, VAudio& outAudio, bool forceReimport) const
+    {
+        std::filesystem::path osPath(filePath);
+        if (!std::filesystem::exists(osPath))
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string relativeImportedPath = m_Registry.getImportedAssetPath(
+            VAssetType::eAudio,
+            importedAssetKeyForCookedOutput(m_Registry, VAssetType::eAudio, relativeSrcPath),
+            true);
+
+        VImport sourceVImport {};
+        auto    sourceSidecarPath = osPath;
+        sourceSidecarPath.replace_extension(".vimport");
+        if (auto loaded = loadVImport(sourceSidecarPath.generic_string()))
+            sourceVImport = std::move(loaded.value());
+
+        const std::string ext            = osPath.extension().generic_string();
+        const bool        isOgg          = ext == ".ogg";
+        const auto        resolvedParams = resolveAudioImportParams(sourceVImport.params, ext, m_Options);
+        auto              options        = resolvedParams.options;
+
+        // Pin the passthrough variant to the actual source format; ogg cannot
+        // passthrough because the runtime has no vorbis decoder.
+        if (isPassthrough(options.storage))
+        {
+            if (ext == ".mp3")
+                options.storage = VAudioStorage::ePassthroughMp3;
+            else if (ext == ".flac")
+                options.storage = VAudioStorage::ePassthroughFlac;
+            else if (ext == ".wav")
+                options.storage = VAudioStorage::ePassthroughWav;
+            else
+                options.storage = VAudioStorage::ePCM16;
+        }
+
+        const auto     lookupUUID = vbase::uuid_from_string_key(relativeImportedPath);
+        const uint64_t sourceHash = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        const uint64_t paramsHash = audioImportParamsHash(options);
+        constexpr auto importerVersion = "audio:1";
+        constexpr auto outputSchema = "vaudio:1";
+
+        auto entry = m_Registry.lookup(lookupUUID);
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeImportedPath}))
+        {
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              lookupUUID,
+                                              toString(VAssetType::eAudio),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 lookupUUID,
+                                                 toString(VAssetType::eAudio),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                std::cout << "Audio already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            }
+        }
+
+        const auto fileBytes = readAll(osPath);
+        if (fileBytes.empty())
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        outAudio = {};
+        outAudio.uuid           = lookupUUID;
+        outAudio.name           = osPath.stem().generic_string();
+        outAudio.storage        = options.storage;
+        outAudio.sourceFileName = relativeSrcPath;
+
+        if (isPassthrough(options.storage))
+        {
+            // Keep the encoded bytes; probe metadata with a native-format decoder.
+            ma_decoder_config config = ma_decoder_config_init(ma_format_unknown, 0, 0);
+            ma_decoder        decoder;
+            if (ma_decoder_init_memory(fileBytes.data(), fileBytes.size(), &config, &decoder) != MA_SUCCESS)
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+            ma_format fmt  = ma_format_unknown;
+            ma_uint32 ch   = 0;
+            ma_uint32 rate = 0;
+            ma_decoder_get_data_format(&decoder, &fmt, &ch, &rate, nullptr, 0);
+            ma_uint64 frames = 0;
+            (void)ma_decoder_get_length_in_pcm_frames(&decoder, &frames);
+            ma_decoder_uninit(&decoder);
+            if (ch == 0 || rate == 0)
+                return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+            outAudio.sampleRate = rate;
+            outAudio.channels   = ch;
+            outAudio.frameCount = frames;
+            outAudio.audioData.resize(fileBytes.size());
+            std::memcpy(outAudio.audioData.data(), fileBytes.data(), fileBytes.size());
+        }
+        else
+        {
+            const ma_format dstFormat =
+                options.storage == VAudioStorage::ePCMF32 ? ma_format_f32 : ma_format_s16;
+
+            if (isOgg)
+            {
+                int    srcChannels = 0;
+                int    srcRate     = 0;
+                short* samples     = nullptr;
+                const int frames   = stb_vorbis_decode_memory(
+                    fileBytes.data(), static_cast<int>(fileBytes.size()), &srcChannels, &srcRate, &samples);
+                if (frames <= 0 || samples == nullptr || srcChannels <= 0 || srcRate <= 0)
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+                const uint32_t dstChannels = options.forceMono ? 1u : static_cast<uint32_t>(srcChannels);
+                const uint32_t dstRate =
+                    options.targetSampleRate != 0u ? options.targetSampleRate : static_cast<uint32_t>(srcRate);
+
+                bool ok = true;
+                if (dstFormat == ma_format_s16 && dstChannels == static_cast<uint32_t>(srcChannels) &&
+                    dstRate == static_cast<uint32_t>(srcRate))
+                {
+                    const size_t byteCount =
+                        static_cast<size_t>(frames) * static_cast<size_t>(srcChannels) * sizeof(int16_t);
+                    outAudio.audioData.resize(byteCount);
+                    std::memcpy(outAudio.audioData.data(), samples, byteCount);
+                    outAudio.frameCount = static_cast<uint64_t>(frames);
+                }
+                else
+                {
+                    uint64_t convertedFrames = 0;
+                    ok = convertPcmFrames(samples,
+                                          static_cast<uint64_t>(frames),
+                                          ma_format_s16,
+                                          static_cast<uint32_t>(srcChannels),
+                                          static_cast<uint32_t>(srcRate),
+                                          dstFormat,
+                                          dstChannels,
+                                          dstRate,
+                                          outAudio.audioData,
+                                          convertedFrames);
+                    outAudio.frameCount = convertedFrames;
+                }
+                std::free(samples);
+                if (!ok)
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+                outAudio.sampleRate = dstRate;
+                outAudio.channels   = dstChannels;
+            }
+            else
+            {
+                // ma_decoder converts format/channels/rate on the fly.
+                ma_decoder_config config = ma_decoder_config_init(
+                    dstFormat, options.forceMono ? 1u : 0u, options.targetSampleRate);
+                ma_decoder decoder;
+                if (ma_decoder_init_memory(fileBytes.data(), fileBytes.size(), &config, &decoder) != MA_SUCCESS)
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+                const uint32_t dstChannels = decoder.outputChannels;
+                const uint32_t dstRate     = decoder.outputSampleRate;
+                const size_t   bpf         = ma_get_bytes_per_frame(dstFormat, dstChannels);
+
+                uint64_t totalFrames = 0;
+                for (;;)
+                {
+                    constexpr ma_uint64 kChunkFrames = 16384;
+                    outAudio.audioData.resize(static_cast<size_t>(totalFrames + kChunkFrames) * bpf);
+                    auto* dst = reinterpret_cast<uint8_t*>(outAudio.audioData.data()) + totalFrames * bpf;
+
+                    ma_uint64 framesRead = 0;
+                    const ma_result rr = ma_decoder_read_pcm_frames(&decoder, dst, kChunkFrames, &framesRead);
+                    totalFrames += framesRead;
+                    if (rr != MA_SUCCESS || framesRead < kChunkFrames)
+                        break;
+                }
+                ma_decoder_uninit(&decoder);
+
+                if (totalFrames == 0)
+                    return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+                outAudio.audioData.resize(static_cast<size_t>(totalFrames) * bpf);
+                outAudio.frameCount = totalFrames;
+                outAudio.sampleRate = dstRate;
+                outAudio.channels   = dstChannels;
+            }
+
+            if (options.normalize)
+            {
+                if (dstFormat == ma_format_s16)
+                    normalizePcm16(outAudio.audioData);
+                else
+                    normalizePcmF32(outAudio.audioData);
+            }
+        }
+
+        outAudio.duration =
+            outAudio.sampleRate != 0u
+                ? static_cast<float>(static_cast<double>(outAudio.frameCount) / outAudio.sampleRate)
+                : 0.0f;
+
+        const std::string importedPath =
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
+
+        auto sr_audio = saveAudio(outAudio, importedPath);
+        if (!sr_audio)
+        {
+            std::cerr << "Failed to save audio." << std::endl;
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_audio.error());
+        }
+
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eAudio);
+        vimport.uid      = outAudio.uuid;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+        vimport.params =
+            normalizedAudioImportParams(std::move(sourceVImport.params), resolvedParams.subtype, options);
+        auto sr_import = saveVImport(vimport, sourceSidecarPath.generic_string());
+        if (!sr_import)
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
+
+        auto rr = m_Registry.registerAsset(outAudio.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eAudio);
+        if (!rr)
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             outAudio.uuid,
+                                             toString(VAssetType::eAudio),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
+        return vbase::Result<vbase::UUID, AssetError>::ok(outAudio.uuid);
+    }
+
     VGaussianSplatImporter::VGaussianSplatImporter(VAssetRegistry& registry) : m_Registry(registry) {}
 
     VGaussianSplatImporter& VGaussianSplatImporter::setOptions(const ImportOptions& options)
@@ -5301,7 +5691,8 @@ namespace vasset
     }
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
-        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry), m_GaussianSplatImporter(registry)
+        m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry),
+        m_GaussianSplatImporter(registry), m_AudioImporter(registry)
     {}
 
     VAssetImporter& VAssetImporter::setOptions(const ImportOptions& options)
@@ -5322,6 +5713,7 @@ namespace vasset
             eTexture,
             eMesh,
             eSplat,
+            eAudio,
             eShaderLibrary,
             eText,
         };
@@ -5352,6 +5744,7 @@ namespace vasset
         size_t importedTextures    = 0;
         size_t importedMeshes      = 0;
         size_t importedSplats      = 0;
+        size_t importedAudios      = 0;
         size_t importedTextAssets  = 0;
         std::vector<ImportCandidate> candidates;
 
@@ -5396,6 +5789,10 @@ namespace vasset
             else if (isValidGaussianSplat(ext))
             {
                 candidates.push_back({entry.path(), relPath, ext, CandidateKind::eSplat});
+            }
+            else if (isValidAudio(ext))
+            {
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eAudio});
             }
             else if (isValidShaderLibraryManifest(entry.path()))
             {
@@ -5476,6 +5873,19 @@ namespace vasset
                 }
                 ++importedSplats;
             }
+            else if (candidate.kind == CandidateKind::eAudio)
+            {
+                std::cout << "[vasset] audio    : " << candidate.relativePath << std::endl;
+                VAudio audio;
+                auto   ar = m_AudioImporter.importAudio(filePath, audio, reimport);
+                if (!ar)
+                {
+                    std::cerr << "[vasset] failed audio    : " << candidate.relativePath << " ("
+                              << assetErrorLabel(ar.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(ar.error());
+                }
+                ++importedAudios;
+            }
             else if (candidate.kind == CandidateKind::eShaderLibrary)
             {
                 std::cout << "[vasset] shaderlib: " << candidate.relativePath << std::endl;
@@ -5508,7 +5918,8 @@ namespace vasset
 
         std::cout << "[vasset] summary  : scanned=" << scannedRegularFiles << ", textures=" << importedTextures
                   << ", meshes=" << importedMeshes << ", splats=" << importedSplats
-                  << ", text_assets=" << importedTextAssets << ", skipped=" << skippedFiles << std::endl;
+                  << ", audios=" << importedAudios << ", text_assets=" << importedTextAssets
+                  << ", skipped=" << skippedFiles << std::endl;
         notifyProgress(ImportProgress::Phase::eDone, candidates.size(), candidates.size());
 
         return vbase::Result<void, AssetError>::ok();
@@ -5575,6 +5986,16 @@ namespace vasset
             auto           gr = m_GaussianSplatImporter.importGaussianSplat(filePath, splat, reimport);
             if (!gr)
                 return vbase::Result<void, AssetError>::err(gr.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        if (isValidAudio(ext))
+        {
+            VAudio audio;
+            auto   ar = m_AudioImporter.importAudio(filePath, audio, reimport);
+            if (!ar)
+                return vbase::Result<void, AssetError>::err(ar.error());
             notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }

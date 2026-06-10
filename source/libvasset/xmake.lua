@@ -1,4 +1,5 @@
 add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
+add_requires("miniaudio 0.11.25")
 local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or has_config("vasset_enable_wasm_import"))
 local enable_ktx_opencl = not is_plat("android", "wasm", "iphoneos")
 local vshadersystem_configs = {debug = is_mode("debug")}
@@ -28,6 +29,7 @@ local runtime_headers = {
     "include/(vasset/vasset_runtime.hpp)",
     "include/(vasset/vasset_type.hpp)",
     "include/(vasset/vanimation.hpp)",
+    "include/(vasset/vaudio.hpp)",
     "include/(vasset/vgaussiansplat.hpp)",
     "include/(vasset/vmaterial.hpp)",
     "include/(vasset/vmesh.hpp)",
@@ -47,6 +49,7 @@ local import_headers = {
     "include/(vasset/tool_cli.hpp)",
     "include/(vasset/texture_import_params.hpp)",
     "include/(vasset/mesh_import_params.hpp)",
+    "include/(vasset/audio_import_params.hpp)",
     "include/(vasset/vimport.hpp)",
 }
 
@@ -59,10 +62,11 @@ target("vasset")
     end
     add_includedirs("include", {public = true})
     add_headerfiles(table.unpack(runtime_headers))
-    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
+    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vaudio.cpp", "src/miniaudio_impl.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
               "src/vtexture.cpp")
     add_deps("dds-ktx", "vfilesystem", {public = true})
     add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })
+    add_packages("miniaudio", { public = true })
     add_packages("ktx", { public = true })
     if enable_ktx_opencl then
         add_packages("opencl", { public = true })
@@ -86,7 +90,7 @@ if enable_import_targets then
         end
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
-        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
+        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/audio_import_params.cpp", "src/stb_vorbis_impl.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
         add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", "ozz-animation", "vshadersystem", { public = true })
         if is_mode("debug") then
