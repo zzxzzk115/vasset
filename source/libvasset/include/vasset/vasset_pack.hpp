@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vasset
@@ -23,6 +24,11 @@ namespace vasset
         int                      zstdLevel {6};
         std::vector<std::string> includePaths;
         std::vector<std::string> rootPaths;
+        // Physical directories packed verbatim under a logical prefix (first = dir, second =
+        // prefix). For content that lives outside the asset root, e.g. managed plugins under
+        // <project>/.vultra/plugins/<id>/<version>. Listing a dir is the opt-in: no
+        // reachability or runtime-raw-extension gating applies to its files.
+        std::vector<std::pair<std::string, std::string>> extraDirs;
     };
 
     vbase::Result<void, AssetError> importAssetFolder(vbase::StringView                  assetRoot,

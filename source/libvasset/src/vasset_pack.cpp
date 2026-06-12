@@ -403,6 +403,54 @@ namespace vasset
             items.push_back(std::move(item));
         }
 
+        // Extra directories (content outside the asset root, e.g. managed plugins): pack every
+        // regular file verbatim under the mapped logical prefix.
+        for (const auto& [extraDirString, logicalPrefixRaw] : options.extraDirs)
+        {
+            const fs::path extraDirPath = fs::absolute(fs::path(extraDirString)).lexically_normal();
+            if (!fs::is_directory(extraDirPath))
+            {
+                std::cerr << "Missing extra pack dir: " << extraDirPath.generic_string() << std::endl;
+                return vbase::Result<size_t, AssetError>::err(AssetError::eNotFound);
+            }
+            const std::string logicalPrefix = normalizePackRootPath(logicalPrefixRaw);
+
+            for (const auto& entry : fs::recursive_directory_iterator(extraDirPath))
+            {
+                if (!entry.is_regular_file())
+                    continue;
+
+                const fs::path& p = entry.path();
+                if (p.extension() == ".vimport" || p.extension() == ".vpk")
+                    continue;
+
+                const std::string relPath = fs::relative(p, extraDirPath).generic_string();
+                if (relPath.empty() || relPath.rfind("imported/", 0) == 0)
+                    continue;
+
+                const std::string logicalPath = logicalPrefix.empty() ? relPath : logicalPrefix + "/" + relPath;
+                if (packedLogicalPaths.contains(logicalPath))
+                    continue;
+
+                std::vector<std::byte> data = readBinaryFile(p);
+                if (data.empty() && !fs::exists(p))
+                {
+                    std::cerr << "Missing extra pack file: " << p.generic_string() << std::endl;
+                    continue;
+                }
+
+                VpkWriteItem item;
+                item.logicalPath   = logicalPath;
+                item.uuid          = vbase::uuid_from_string_key(logicalPath);
+                item.type          = inferRuntimeRawAssetType(logicalPath);
+                item.bytes         = std::move(data);
+                item.allowCompress = true;
+
+                packedLogicalPaths.insert(logicalPath);
+                items.push_back(std::move(item));
+            }
+        }
+
         if (items.empty())
         {
             std::cerr << "No packable assets found under: " << assetRootString << std::endl;

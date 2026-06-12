@@ -573,6 +573,7 @@ static int cmd_pack(int argc, char** argv)
                      "  --zstd <level>\n"
                      "  --include <logical-path-prefix>\n"
                      "  --root <scene-or-asset-root>\n"
+                     "  --extra-dir <dir>=<logical/prefix>   pack a directory outside the asset root\n"
                   << std::endl;
         return 1;
     }
@@ -591,6 +592,7 @@ static int cmd_pack(int argc, char** argv)
     int                      zstdLevel = 6;
     std::vector<std::string> includePaths;
     std::vector<std::string> rootPaths;
+    std::vector<std::pair<std::string, std::string>> extraDirs;
     for (int i = 3; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -610,6 +612,19 @@ static int cmd_pack(int argc, char** argv)
             rootPaths.push_back(argv[i + 1]);
             ++i;
         }
+        else if (a == "--extra-dir" && i + 1 < argc)
+        {
+            // <dir>=<logical/prefix>; split at the last '=' so Windows paths stay intact.
+            const std::string spec  = argv[i + 1];
+            const auto        split = spec.rfind('=');
+            if (split == std::string::npos || split == 0 || split + 1 >= spec.size())
+            {
+                std::cerr << "Invalid --extra-dir (expected <dir>=<logical/prefix>): " << spec << std::endl;
+                return 1;
+            }
+            extraDirs.emplace_back(spec.substr(0, split), spec.substr(split + 1));
+            ++i;
+        }
     }
 
     if (!includePaths.empty())
@@ -623,6 +638,12 @@ static int cmd_pack(int argc, char** argv)
         std::cout << "Packing dependency closure from roots:" << std::endl;
         for (const auto& rootPath : rootPaths)
             std::cout << "  - " << rootPath << std::endl;
+    }
+    if (!extraDirs.empty())
+    {
+        std::cout << "Packing extra directories:" << std::endl;
+        for (const auto& [dir, prefix] : extraDirs)
+            std::cout << "  - " << dir << " -> " << prefix << std::endl;
     }
 
     namespace fs = std::filesystem;
@@ -638,6 +659,7 @@ static int cmd_pack(int argc, char** argv)
         options.zstdLevel   = zstdLevel;
         options.includePaths = includePaths;
         options.rootPaths    = rootPaths;
+        options.extraDirs    = extraDirs;
 
         auto packResult = packAssetFolderToVpk(assetRoot, outVpk, options);
         if (!packResult)
@@ -648,6 +670,12 @@ static int cmd_pack(int argc, char** argv)
 
         std::cout << "Packed VPK: " << outVpk << " (" << packResult.value() << " entries)" << std::endl;
         return 0;
+    }
+
+    if (!extraDirs.empty())
+    {
+        std::cerr << "--extra-dir requires an imported asset registry: " << registryPath << std::endl;
+        return 1;
     }
 
     // Pack rule (pure pipeline):
@@ -931,8 +959,8 @@ int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& i
                 R"(Usage:
 
     vasset-cli import <asset-root> [--reimport]
-    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset]
-    vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] [--include logical/path] [--root res://scene-or-asset]
+    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix]
+    vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix]
     vasset-cli validate-vpk <path/to/resources.vpk> [--asset-root <asset-root>] [--registry <asset_registry.tsv>]
 )" << std::endl;
             return 1;
