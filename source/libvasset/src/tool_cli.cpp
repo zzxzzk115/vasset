@@ -2,6 +2,7 @@
 #include <vasset/tool_cli.hpp>
 
 #include <vasset/vasset_import.hpp>
+#include <vasset/vasset_pack.hpp>
 #include <vasset/vasset_registry.hpp>
 #include <vasset/vpk.hpp>
 #include <vasset/vtexture.hpp>
@@ -562,40 +563,19 @@ static int cmd_import(int argc, char** argv, const VAssetImporter::ImportOptions
     return 0;
 }
 
-static int cmd_pack(int argc, char** argv)
+// Parse the optional pack arguments (shared by `pack`; `cook` forwards its extras here too).
+// Returns false on a malformed argument (a message is printed).
+static bool parsePackExtraArgs(int                       argc,
+                               char**                    argv,
+                               int                       start,
+                               int&                      zstdLevel,
+                               std::vector<std::string>& includePaths,
+                               std::vector<std::string>& rootPaths,
+                               std::vector<VpkExtraDir>& extraDirs)
 {
-    if (argc < 3)
+    for (int i = start; i < argc; ++i)
     {
-        std::cout << "Usage: vasset-cli pack <asset-root> <out.vpk>\n"
-                     "  - asset-root: root folder that contains source assets and imported registry\n"
-                     "  - out.vpk: output package\n"
-                     "Optional:\n"
-                     "  --zstd <level>\n"
-                     "  --include <logical-path-prefix>\n"
-                     "  --root <scene-or-asset-root>\n"
-                     "  --extra-dir <dir>=<logical/prefix>   pack a directory outside the asset root\n"
-                  << std::endl;
-        return 1;
-    }
-
-    std::string assetRootArg = argv[1];
-    std::filesystem::path assetRootResolved;
-    std::string           assetRootResolveHint;
-    if (!resolveAssetRootPath(assetRootArg, assetRootResolved, assetRootResolveHint))
-    {
-        std::cerr << "Failed to resolve asset root: " << assetRootResolveHint << std::endl;
-        return 1;
-    }
-    std::string assetRoot = assetRootResolved.generic_string();
-    std::string outVpk    = argv[2];
-
-    int                      zstdLevel = 6;
-    std::vector<std::string> includePaths;
-    std::vector<std::string> rootPaths;
-    std::vector<std::pair<std::string, std::string>> extraDirs;
-    for (int i = 3; i < argc; ++i)
-    {
-        std::string a = argv[i];
+        const std::string a = argv[i];
         if (a == "--zstd" && i + 1 < argc)
         {
             zstdLevel = argv[i + 1][0] - '0';
@@ -620,12 +600,73 @@ static int cmd_pack(int argc, char** argv)
             if (split == std::string::npos || split == 0 || split + 1 >= spec.size())
             {
                 std::cerr << "Invalid --extra-dir (expected <dir>=<logical/prefix>): " << spec << std::endl;
-                return 1;
+                return false;
             }
-            extraDirs.emplace_back(spec.substr(0, split), spec.substr(split + 1));
+            extraDirs.push_back(VpkExtraDir {.dir = spec.substr(0, split), .logicalPrefix = spec.substr(split + 1)});
+            ++i;
+        }
+        else if (a == "--extra-exclude" && i + 1 < argc)
+        {
+            // <logical/prefix>=<glob>; attaches the glob to the matching --extra-dir (which must
+            // have been declared first). Split at the last '=' to keep the glob intact.
+            const std::string spec  = argv[i + 1];
+            const auto        split = spec.rfind('=');
+            if (split == std::string::npos || split == 0 || split + 1 >= spec.size())
+            {
+                std::cerr << "Invalid --extra-exclude (expected <logical/prefix>=<glob>): " << spec << std::endl;
+                return false;
+            }
+            const std::string prefix = spec.substr(0, split);
+            const std::string glob   = spec.substr(split + 1);
+            const auto        it =
+                std::find_if(extraDirs.begin(), extraDirs.end(),
+                             [&](const VpkExtraDir& e) { return e.logicalPrefix == prefix; });
+            if (it == extraDirs.end())
+            {
+                std::cerr << "--extra-exclude prefix matches no preceding --extra-dir: " << prefix << std::endl;
+                return false;
+            }
+            it->excludeGlobs.push_back(glob);
             ++i;
         }
     }
+    return true;
+}
+
+static int cmd_pack(int argc, char** argv)
+{
+    if (argc < 3)
+    {
+        std::cout << "Usage: vasset-cli pack <asset-root> <out.vpk>\n"
+                     "  - asset-root: root folder that contains source assets and imported registry\n"
+                     "  - out.vpk: output package\n"
+                     "Optional:\n"
+                     "  --zstd <level>\n"
+                     "  --include <logical-path-prefix>\n"
+                     "  --root <scene-or-asset-root>\n"
+                     "  --extra-dir <dir>=<logical/prefix>   pack a directory outside the asset root\n"
+                     "  --extra-exclude <logical/prefix>=<glob>   drop matching files from an --extra-dir\n"
+                  << std::endl;
+        return 1;
+    }
+
+    std::string assetRootArg = argv[1];
+    std::filesystem::path assetRootResolved;
+    std::string           assetRootResolveHint;
+    if (!resolveAssetRootPath(assetRootArg, assetRootResolved, assetRootResolveHint))
+    {
+        std::cerr << "Failed to resolve asset root: " << assetRootResolveHint << std::endl;
+        return 1;
+    }
+    std::string assetRoot = assetRootResolved.generic_string();
+    std::string outVpk    = argv[2];
+
+    int                      zstdLevel = 6;
+    std::vector<std::string> includePaths;
+    std::vector<std::string> rootPaths;
+    std::vector<VpkExtraDir> extraDirs;
+    if (!parsePackExtraArgs(argc, argv, 3, zstdLevel, includePaths, rootPaths, extraDirs))
+        return 1;
 
     if (!includePaths.empty())
     {
@@ -642,8 +683,12 @@ static int cmd_pack(int argc, char** argv)
     if (!extraDirs.empty())
     {
         std::cout << "Packing extra directories:" << std::endl;
-        for (const auto& [dir, prefix] : extraDirs)
-            std::cout << "  - " << dir << " -> " << prefix << std::endl;
+        for (const auto& extra : extraDirs)
+        {
+            std::cout << "  - " << extra.dir << " -> " << extra.logicalPrefix << std::endl;
+            for (const auto& glob : extra.excludeGlobs)
+                std::cout << "      (exclude) " << glob << std::endl;
+        }
     }
 
     namespace fs = std::filesystem;
@@ -959,8 +1004,8 @@ int run_vasset_cli(int argc, char** argv, const VAssetImporter::ImportOptions& i
                 R"(Usage:
 
     vasset-cli import <asset-root> [--reimport]
-    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix]
-    vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix]
+    vasset-cli pack <asset-root> <out.vpk> [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix] [--extra-exclude logical/prefix=glob]
+    vasset-cli cook <asset-root> <out.vpk> [--reimport] [--zstd N] [--include logical/path] [--root res://scene-or-asset] [--extra-dir dir=logical/prefix] [--extra-exclude logical/prefix=glob]
     vasset-cli validate-vpk <path/to/resources.vpk> [--asset-root <asset-root>] [--registry <asset_registry.tsv>]
 )" << std::endl;
             return 1;

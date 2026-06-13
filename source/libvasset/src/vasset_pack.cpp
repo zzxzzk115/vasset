@@ -267,6 +267,54 @@ namespace vasset
         }
     } // namespace
 
+    bool matchPathGlob(std::string_view relPath, std::string_view glob)
+    {
+        // A bare directory name (no wildcard, no '/') also matches everything beneath it, so
+        // "editor" excludes "editor/panel.lua". Rewrite it to a "<glob>/**" form for the matcher.
+        if (glob.find_first_of("*?/") == std::string_view::npos && relPath.size() > glob.size() &&
+            relPath.compare(0, glob.size(), glob) == 0 && relPath[glob.size()] == '/')
+            return true;
+
+        // Recursive wildcard match. p indexes the path, g the glob.
+        const auto match = [](auto&& self, std::string_view p, std::string_view g) -> bool {
+            size_t pi = 0, gi = 0;
+            while (gi < g.size())
+            {
+                const char gc = g[gi];
+                if (gc == '*')
+                {
+                    const bool doubleStar = gi + 1 < g.size() && g[gi + 1] == '*';
+                    gi += doubleStar ? 2 : 1;
+                    if (gi == g.size())
+                        return doubleStar || p.find('/', pi) == std::string_view::npos;
+                    // Try to match the remainder of the glob at every later position. A single '*'
+                    // does not cross '/'; '**' may.
+                    for (size_t k = pi; k <= p.size(); ++k)
+                    {
+                        if (self(self, p.substr(k), g.substr(gi)))
+                            return true;
+                        if (k < p.size() && p[k] == '/' && !doubleStar)
+                            break;
+                    }
+                    return false;
+                }
+                if (pi >= p.size())
+                    return false;
+                if (gc == '?')
+                {
+                    if (p[pi] == '/')
+                        return false;
+                }
+                else if (gc != p[pi])
+                    return false;
+                ++pi;
+                ++gi;
+            }
+            return pi == p.size();
+        };
+        return match(match, relPath, glob);
+    }
+
     vbase::Result<void, AssetError> importAssetFolder(vbase::StringView                  assetRoot,
                                                       const AssetFolderImportOptions& options)
     {
@@ -405,15 +453,15 @@ namespace vasset
 
         // Extra directories (content outside the asset root, e.g. managed plugins): pack every
         // regular file verbatim under the mapped logical prefix.
-        for (const auto& [extraDirString, logicalPrefixRaw] : options.extraDirs)
+        for (const auto& extra : options.extraDirs)
         {
-            const fs::path extraDirPath = fs::absolute(fs::path(extraDirString)).lexically_normal();
+            const fs::path extraDirPath = fs::absolute(fs::path(extra.dir)).lexically_normal();
             if (!fs::is_directory(extraDirPath))
             {
                 std::cerr << "Missing extra pack dir: " << extraDirPath.generic_string() << std::endl;
                 return vbase::Result<size_t, AssetError>::err(AssetError::eNotFound);
             }
-            const std::string logicalPrefix = normalizePackRootPath(logicalPrefixRaw);
+            const std::string logicalPrefix = normalizePackRootPath(extra.logicalPrefix);
 
             for (const auto& entry : fs::recursive_directory_iterator(extraDirPath))
             {
@@ -426,6 +474,11 @@ namespace vasset
 
                 const std::string relPath = fs::relative(p, extraDirPath).generic_string();
                 if (relPath.empty() || relPath.rfind("imported/", 0) == 0)
+                    continue;
+
+                // Editor-only files: dropped from the package (matched against the dir-relative path).
+                if (std::any_of(extra.excludeGlobs.begin(), extra.excludeGlobs.end(),
+                                [&](const std::string& g) { return matchPathGlob(relPath, g); }))
                     continue;
 
                 const std::string logicalPath = logicalPrefix.empty() ? relPath : logicalPrefix + "/" + relPath;
