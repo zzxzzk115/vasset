@@ -2,6 +2,7 @@
 
 #include "vasset/asset_error.hpp"
 #include "vasset/vaudio.hpp"
+#include "vasset/vfont.hpp"
 #include "vasset/vgaussiansplat.hpp"
 #include "vasset/vmesh.hpp"
 #include "vbase/core/uuid.hpp"
@@ -157,6 +158,27 @@ namespace vasset
         ImportOptions   m_Options;
     };
 
+    class VFontImporter
+    {
+    public:
+        struct ImportOptions
+        {
+            // Fonts cook as a verbatim byte copy in v1; options are reserved so the
+            // importer signature stays uniform with the other asset importers.
+        };
+
+        VFontImporter(VAssetRegistry& registry);
+
+        VFontImporter& setOptions(const ImportOptions& options);
+
+        vbase::Result<vbase::UUID, AssetError>
+        importFont(vbase::StringView filePath, VFont& outFont, bool forceReimport = false) const;
+
+    private:
+        VAssetRegistry& m_Registry;
+        ImportOptions   m_Options;
+    };
+
     class VGaussianSplatImporter
     {
     public:
@@ -230,6 +252,7 @@ namespace vasset
         VTextureImporter&       getTextureImporter() { return m_TextureImporter; }
         VGaussianSplatImporter& getGaussianSplatImporter() { return m_GaussianSplatImporter; }
         VAudioImporter&         getAudioImporter() { return m_AudioImporter; }
+        VFontImporter&          getFontImporter() { return m_FontImporter; }
 
     private:
         VAssetRegistry&        m_Registry;
@@ -237,6 +260,7 @@ namespace vasset
         VTextureImporter       m_TextureImporter;
         VGaussianSplatImporter m_GaussianSplatImporter;
         VAudioImporter         m_AudioImporter;
+        VFontImporter          m_FontImporter;
         ImportOptions          m_Options;
     };
 } // namespace vasset

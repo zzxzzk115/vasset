@@ -62,7 +62,7 @@ target("vasset")
     end
     add_includedirs("include", {public = true})
     add_headerfiles(table.unpack(runtime_headers))
-    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vaudio.cpp", "src/miniaudio_impl.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
+    add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vaudio.cpp", "src/vfont.cpp", "src/miniaudio_impl.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
               "src/vtexture.cpp")
     add_deps("dds-ktx", "vfilesystem", {public = true})
     add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })

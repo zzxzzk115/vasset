@@ -26,6 +26,7 @@ namespace vasset
         eShaderLibrary,
         ePrefab,
         eAudio,
+        eFont,
     };
 
     inline std::string toString(VAssetType type)
@@ -66,6 +67,8 @@ namespace vasset
                 return "prefab";
             case VAssetType::eAudio:
                 return "audio";
+            case VAssetType::eFont:
+                return "font";
             case VAssetType::eUnknown:
             default:
                 return "unknown";
@@ -141,6 +144,10 @@ namespace vasset
         else if (typeStr == "audio")
         {
             return VAssetType::eAudio;
+        }
+        else if (typeStr == "font")
+        {
+            return VAssetType::eFont;
         }
         else
         {

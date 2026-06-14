@@ -461,6 +461,8 @@ namespace
         return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg";
     }
 
+    bool isValidFont(vbase::StringView ext) { return ext == ".ttf" || ext == ".otf"; }
+
     bool isValidScene(vbase::StringView ext) { return ext == ".vscn"; }
 
     bool isValidSceneManifest(vbase::StringView ext) { return ext == ".vmanifest"; }
@@ -5516,6 +5518,124 @@ namespace vasset
         return vbase::Result<vbase::UUID, AssetError>::ok(outAudio.uuid);
     }
 
+    VFontImporter::VFontImporter(VAssetRegistry& registry) : m_Registry(registry) {}
+
+    VFontImporter& VFontImporter::setOptions(const ImportOptions& options)
+    {
+        m_Options = options;
+        return *this;
+    }
+
+    vbase::Result<vbase::UUID, AssetError>
+    VFontImporter::importFont(vbase::StringView filePath, VFont& outFont, bool forceReimport) const
+    {
+        std::filesystem::path osPath(filePath);
+        if (!std::filesystem::exists(osPath))
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        const std::string relativeSrcPath = m_Registry.getSourceAssetPath(osPath.generic_string(), true);
+        const std::string relativeImportedPath = m_Registry.getImportedAssetPath(
+            VAssetType::eFont,
+            importedAssetKeyForCookedOutput(m_Registry, VAssetType::eFont, relativeSrcPath),
+            true);
+
+        VImport sourceVImport {};
+        auto    sourceSidecarPath = osPath;
+        sourceSidecarPath.replace_extension(".vimport");
+        if (auto loaded = loadVImport(sourceSidecarPath.generic_string()))
+            sourceVImport = std::move(loaded.value());
+
+        const std::string ext = osPath.extension().generic_string();
+
+        const auto         lookupUUID     = vbase::uuid_from_string_key(relativeImportedPath);
+        const uint64_t     sourceHash     = hashFile(osPath);
+        constexpr uint64_t dependencyHash = 0;
+        constexpr uint64_t paramsHash     = 0;
+        constexpr auto     importerVersion = "font:1";
+        constexpr auto     outputSchema    = "vfont:1";
+
+        auto entry = m_Registry.lookup(lookupUUID);
+        if (entry.type != VAssetType::eUnknown && !forceReimport &&
+            outputFilesAreNewerThanSource(m_Registry, osPath, {relativeImportedPath}))
+        {
+            if (importDatabaseRecordIsCurrent(m_Registry,
+                                              lookupUUID,
+                                              toString(VAssetType::eFont),
+                                              relativeSrcPath,
+                                              relativeImportedPath,
+                                              importerVersion,
+                                              outputSchema,
+                                              sourceHash,
+                                              dependencyHash,
+                                              paramsHash,
+                                              {relativeImportedPath}))
+            {
+                (void)updateImportDatabaseRecord(m_Registry,
+                                                 lookupUUID,
+                                                 toString(VAssetType::eFont),
+                                                 relativeSrcPath,
+                                                 relativeImportedPath,
+                                                 importerVersion,
+                                                 outputSchema,
+                                                 sourceHash,
+                                                 dependencyHash,
+                                                 paramsHash);
+                std::cout << "Font already imported: " << entry.sourcePath << std::endl;
+                return vbase::Result<vbase::UUID, AssetError>::ok(lookupUUID);
+            }
+        }
+
+        const auto fileBytes = readAll(osPath);
+        if (fileBytes.empty())
+            return vbase::Result<vbase::UUID, AssetError>::err(AssetError::eImportFailed);
+
+        outFont                = {};
+        outFont.uuid           = lookupUUID;
+        outFont.name           = osPath.stem().generic_string();
+        outFont.format         = ext == ".otf" ? VFontFormat::eOTF : VFontFormat::eTTF;
+        outFont.sourceFileName = relativeSrcPath;
+        outFont.fontData.resize(fileBytes.size());
+        std::memcpy(outFont.fontData.data(), fileBytes.data(), fileBytes.size());
+
+        const std::string importedPath =
+            (std::filesystem::path(m_Registry.getAssetRootPath()) / relativeImportedPath).generic_string();
+
+        auto sr_font = saveFont(outFont, importedPath);
+        if (!sr_font)
+        {
+            std::cerr << "Failed to save font." << std::endl;
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_font.error());
+        }
+
+        VImport vimport {};
+        vimport.importer = toString(VAssetType::eFont);
+        vimport.uid      = outFont.uuid;
+        vimport.source   = relativeSrcPath;
+        vimport.output   = relativeImportedPath;
+        vimport.params   = std::move(sourceVImport.params);
+        auto sr_import   = saveVImport(vimport, sourceSidecarPath.generic_string());
+        if (!sr_import)
+            return vbase::Result<vbase::UUID, AssetError>::err(sr_import.error());
+
+        auto rr = m_Registry.registerAsset(outFont.uuid, relativeSrcPath, relativeImportedPath, VAssetType::eFont);
+        if (!rr)
+            return vbase::Result<vbase::UUID, AssetError>::err(rr.error());
+
+        auto dr = updateImportDatabaseRecord(m_Registry,
+                                             outFont.uuid,
+                                             toString(VAssetType::eFont),
+                                             relativeSrcPath,
+                                             relativeImportedPath,
+                                             importerVersion,
+                                             outputSchema,
+                                             sourceHash,
+                                             dependencyHash,
+                                             paramsHash);
+        if (!dr)
+            return vbase::Result<vbase::UUID, AssetError>::err(dr.error());
+        return vbase::Result<vbase::UUID, AssetError>::ok(outFont.uuid);
+    }
+
     VGaussianSplatImporter::VGaussianSplatImporter(VAssetRegistry& registry) : m_Registry(registry) {}
 
     VGaussianSplatImporter& VGaussianSplatImporter::setOptions(const ImportOptions& options)
@@ -5692,7 +5812,7 @@ namespace vasset
 
     VAssetImporter::VAssetImporter(VAssetRegistry& registry) :
         m_Registry(registry), m_TextureImporter(registry), m_MeshImporter(registry),
-        m_GaussianSplatImporter(registry), m_AudioImporter(registry)
+        m_GaussianSplatImporter(registry), m_AudioImporter(registry), m_FontImporter(registry)
     {}
 
     VAssetImporter& VAssetImporter::setOptions(const ImportOptions& options)
@@ -5714,6 +5834,7 @@ namespace vasset
             eMesh,
             eSplat,
             eAudio,
+            eFont,
             eShaderLibrary,
             eText,
         };
@@ -5745,6 +5866,7 @@ namespace vasset
         size_t importedMeshes      = 0;
         size_t importedSplats      = 0;
         size_t importedAudios      = 0;
+        size_t importedFonts       = 0;
         size_t importedTextAssets  = 0;
         std::vector<ImportCandidate> candidates;
 
@@ -5793,6 +5915,10 @@ namespace vasset
             else if (isValidAudio(ext))
             {
                 candidates.push_back({entry.path(), relPath, ext, CandidateKind::eAudio});
+            }
+            else if (isValidFont(ext))
+            {
+                candidates.push_back({entry.path(), relPath, ext, CandidateKind::eFont});
             }
             else if (isValidShaderLibraryManifest(entry.path()))
             {
@@ -5886,6 +6012,19 @@ namespace vasset
                 }
                 ++importedAudios;
             }
+            else if (candidate.kind == CandidateKind::eFont)
+            {
+                std::cout << "[vasset] font     : " << candidate.relativePath << std::endl;
+                VFont font;
+                auto  fr = m_FontImporter.importFont(filePath, font, reimport);
+                if (!fr)
+                {
+                    std::cerr << "[vasset] failed font     : " << candidate.relativePath << " ("
+                              << assetErrorLabel(fr.error()) << ")" << std::endl;
+                    return vbase::Result<void, AssetError>::err(fr.error());
+                }
+                ++importedFonts;
+            }
             else if (candidate.kind == CandidateKind::eShaderLibrary)
             {
                 std::cout << "[vasset] shaderlib: " << candidate.relativePath << std::endl;
@@ -5918,8 +6057,8 @@ namespace vasset
 
         std::cout << "[vasset] summary  : scanned=" << scannedRegularFiles << ", textures=" << importedTextures
                   << ", meshes=" << importedMeshes << ", splats=" << importedSplats
-                  << ", audios=" << importedAudios << ", text_assets=" << importedTextAssets
-                  << ", skipped=" << skippedFiles << std::endl;
+                  << ", audios=" << importedAudios << ", fonts=" << importedFonts
+                  << ", text_assets=" << importedTextAssets << ", skipped=" << skippedFiles << std::endl;
         notifyProgress(ImportProgress::Phase::eDone, candidates.size(), candidates.size());
 
         return vbase::Result<void, AssetError>::ok();
@@ -5996,6 +6135,16 @@ namespace vasset
             auto   ar = m_AudioImporter.importAudio(filePath, audio, reimport);
             if (!ar)
                 return vbase::Result<void, AssetError>::err(ar.error());
+            notifyProgress(ImportProgress::Phase::eDone, 1);
+            return vbase::Result<void, AssetError>::ok();
+        }
+
+        if (isValidFont(ext))
+        {
+            VFont font;
+            auto  fr = m_FontImporter.importFont(filePath, font, reimport);
+            if (!fr)
+                return vbase::Result<void, AssetError>::err(fr.error());
             notifyProgress(ImportProgress::Phase::eDone, 1);
             return vbase::Result<void, AssetError>::ok();
         }
