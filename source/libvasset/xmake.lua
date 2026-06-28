@@ -8,10 +8,7 @@ if is_host("windows") then
 end
 
 if enable_import_targets then
-    -- Pin assimp v5.4.3: the xmake-repo assimp package only ships platform patches (mingw / x86
-    -- windows / static-CRT / zlib) for 5.x; v6.0.x has none and fails to install on several
-    -- toolchains. 5.4.3 is the latest patched/stable 5.x and API-compatible with our importers.
-    add_requires("assimp v5.4.3", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
+    add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
     add_requires("vshadersystem v0.11.3", {configs = vshadersystem_configs})
 end
