@@ -8,7 +8,11 @@ if is_host("windows") then
 end
 
 if enable_import_targets then
-    add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = not is_plat("wasm")}})
+    -- draco only on Windows/MSVC: assimp's CMake set_target_properties on the draco target fails
+    -- under the current Unix toolchain (GCC13 + recent CMake) for both 5.x and 6.x (upstream
+    -- assimp<->draco regression). Windows still builds with draco; other platforms drop Draco glTF.
+    local assimp_draco = is_plat("windows")
+    add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = assimp_draco}})
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
     add_requires("vshadersystem v0.11.3", {configs = vshadersystem_configs})
 end
