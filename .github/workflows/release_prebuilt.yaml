@@ -138,23 +138,23 @@ jobs:
 
       - name: Configure (Windows)
         if: ${{ matrix.plat == 'windows' }}
-        run: xmake f -m release -p windows -a ${{ matrix.arch }} --vs=${{ matrix.vs }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p windows -a ${{ matrix.arch }} --vs=${{ matrix.vs }} --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Configure (Linux)
         if: ${{ matrix.plat == 'linux' }}
-        run: xmake f -m release -p linux -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p linux -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Configure (macOS)
         if: ${{ matrix.plat == 'macosx' }}
-        run: xmake f -m release -p macosx -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p macosx -a ${{ matrix.arch }} --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Configure (Android)
         if: matrix.android
-        run: xmake f -m release -p android -a ${{ matrix.arch }} --ndk="${ANDROID_SDK_ROOT}/ndk/30.0.14904198" --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p android -a ${{ matrix.arch }} --ndk="${ANDROID_SDK_ROOT}/ndk/30.0.14904198" --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Configure (WASM)
         if: ${{ matrix.plat == 'wasm' }}
-        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Build
         run: xmake repo -u && xmake -vD -y

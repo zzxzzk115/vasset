@@ -45,7 +45,7 @@ jobs:
           }
 
       - name: Configure
-        run: xmake f -m release -p windows -a x64 --vs=2022 --vasset_build_examples=y --vasset_build_tests=y --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p windows -a x64 --vs=2022 --vasset_build_examples=y --vasset_build_tests=y --policies=build.ccache:y -y
 
       - name: Build
         shell: pwsh

@@ -35,7 +35,7 @@ jobs:
           ls -la "${ANDROID_SDK_ROOT}/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
       - name: Configure Android Build
-        run: xmake f -m release -p android -a arm64-v8a --ndk="${ANDROID_SDK_ROOT}/ndk/30.0.14904198" --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p android -a arm64-v8a --ndk="${ANDROID_SDK_ROOT}/ndk/30.0.14904198" --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Show Targets
         run: xmake show -l targets

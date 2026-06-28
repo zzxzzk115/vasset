@@ -29,7 +29,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install build-essential cmake git clang ninja-build python3 -y
 
       - name: Configure WASM Build
-        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Show Targets
         run: xmake show -l targets

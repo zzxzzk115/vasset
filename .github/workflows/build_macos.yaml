@@ -21,7 +21,7 @@ jobs:
           build-cache: true
 
       - name: Configure
-        run: xmake f -m release -p macosx --vasset_build_examples=y --vasset_build_tests=y --VFileSystem_build_examples=n --VBase_build_examples=n --policies=build.ccache:y -y
+        run: xmake f -m release -p macosx --vasset_build_examples=y --vasset_build_tests=y --policies=build.ccache:y -y
 
       - name: Build
         run: xmake repo -u && xmake -vD -y
