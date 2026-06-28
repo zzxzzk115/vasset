@@ -33,4 +33,4 @@ target("GaussForge")
     remove_files("GaussForge/src/io/sog_*.cpp")
     add_deps("spz", {public = true})
 
-includes("vfilesystem")
+-- vfilesystem is now consumed from xmake-repo (see source/libvasset add_requires), not vendored.
