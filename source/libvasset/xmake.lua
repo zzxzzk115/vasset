@@ -29,6 +29,7 @@ end
 
 local runtime_headers = {
     "include/(vasset/asset_error.hpp)",
+    "include/(vasset/vasset_c_api.h)",
     "include/(vasset/uuid_resolver.hpp)",
     "include/(vasset/vasset_registry.hpp)",
     "include/(vasset/vasset_runtime.hpp)",
@@ -68,7 +69,7 @@ target("vasset")
     add_includedirs("include", {public = true})
     add_headerfiles(table.unpack(runtime_headers))
     add_files("src/vasset_registry.cpp", "src/vgaussiansplat.cpp", "src/vanimation.cpp", "src/vaudio.cpp", "src/vfont.cpp", "src/miniaudio_impl.cpp", "src/vmesh.cpp", "src/vpk.cpp", "src/vpk_filesystem.cpp",
-              "src/vtexture.cpp")
+              "src/vtexture.cpp", "src/vasset_c_api_runtime.cpp")
     add_deps("dds-ktx", {public = true})
     add_packages("vfilesystem", {public = true}) -- published package (was a submodule target)
     add_packages("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd", { public = true })
@@ -96,7 +97,7 @@ if enable_import_targets then
         end
         add_includedirs("include", {public = true})
         add_headerfiles(table.unpack(import_headers))
-        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/audio_import_params.cpp", "src/stb_vorbis_impl.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp")
+        add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/audio_import_params.cpp", "src/stb_vorbis_impl.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp", "src/vasset_c_api_import.cpp")
         add_deps("vasset", "GaussForge", {public = true})
         add_packages("assimp", "ozz-animation", "vshadersystem", { public = true })
         if is_mode("debug") then
