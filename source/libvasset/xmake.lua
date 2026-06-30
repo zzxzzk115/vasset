@@ -3,7 +3,9 @@ add_requires("vfilesystem") -- consumed from xmake-repo (was an external/ submod
 add_requires("miniaudio 0.11.25")
 local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or has_config("vasset_enable_wasm_import"))
 local enable_ktx_opencl = not is_plat("android", "wasm", "iphoneos")
-local vshadersystem_configs = {debug = is_mode("debug")}
+-- vshaderc_lib: link the offline Slang compile library (vshaderc-lib) so the importer compiles
+-- shaders in-process via vshaderc::build_shader (v1.0.0 has no in-lib GLSL build API).
+local vshadersystem_configs = {debug = is_mode("debug"), vshaderc_lib = true}
 if is_host("windows") then
     vshadersystem_configs.runtimes = is_mode("debug") and "MTd" or "MT"
 end
@@ -15,7 +17,7 @@ if enable_import_targets then
     local assimp_draco = is_plat("windows")
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = assimp_draco}})
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
-    add_requires("vshadersystem v0.11.3", {configs = vshadersystem_configs})
+    add_requires("vshadersystem v1.0.0", {configs = vshadersystem_configs})
 end
 add_requires("ktx", {configs = {
     decoder = true,

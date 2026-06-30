@@ -15,12 +15,16 @@
 
 #include <ktx.h>
 
-#include <vshadersystem/binary.hpp>
+// v1.0.0: shader compilation is Slang-based and lives in vshaderc-lib (the offline compile core the
+// vshaderc CLI uses); the runtime serialization is vshadersystem::v1 in vsh_format.hpp. The old GLSL
+// build API (binary/library/system.hpp, build_multiple_shaders/write_vslib) is gone.
+#include <vshaderc/slang_build.hpp>
+#include <vshaderc/slang_compiler.hpp>
+
 #include <vshadersystem/engine_keywords.hpp>
-#include <vshadersystem/hash.hpp>
-#include <vshadersystem/library.hpp>
-#include <vshadersystem/shader_id.hpp>
-#include <vshadersystem/system.hpp>
+#include <vshadersystem/result.hpp>
+#include <vshadersystem/types.hpp>
+#include <vshadersystem/vsh_format.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -2335,20 +2339,30 @@ namespace
             engineKeywords = std::move(parsed.value());
         }
 
-        std::vector<vshadersystem::ShaderLibraryEntry> entries;
+        // The Slang compiler is expensive to construct (global session + core module); build once
+        // and reuse across every shader in the library.
+        vshaderc::SlangCompiler compiler;
+        if (!compiler.isValid())
+        {
+            const std::string message = "failed to initialize the Slang compiler";
+            std::cerr << "[vasset] " << message << std::endl;
+            emitShaderDiagnostic(diagnostics, manifest.name, message);
+            return false;
+        }
+
+        // Builtin includes become in-memory VFS files (replacing the old single-root VfsMount); each
+        // shader resolves `import`/`#include` against them. Sources are .slang in v1.0.0.
+        std::vector<vshaderc::SlangSourceFile> builtinVfs;
+        builtinVfs.reserve(virtualIncludes.size());
+        for (const auto& include : virtualIncludes)
+            builtinVfs.push_back({include.virtualPath, include.sourceText});
+
         const auto sourceRoots = shaderLibrarySourceRoots(assetRoot, manifest);
 
-        // Builtin GLSL includes as a single root VFS mount: they resolve by
-        // absolute path (e.g. "include/vultra/mesh_material.glsl") from any
-        // shader directory, including generated/material-graph shaders.
-        vshadersystem::VfsMount builtinMount;
-        builtinMount.files.reserve(virtualIncludes.size());
-        for (const auto& include : virtualIncludes)
-            builtinMount.files.push_back({include.virtualPath, include.sourceText});
-
+        std::vector<vshadersystem::v1::LibraryEntry> entries;
         for (const auto& source : sources)
         {
-            const auto shaderPath = source.root / source.relativePath;
+            const auto shaderPath  = source.root / source.relativePath;
             const auto sourceBytes = readAll(shaderPath);
             if (sourceBytes.empty())
             {
@@ -2356,42 +2370,26 @@ namespace
                           << std::endl;
                 return false;
             }
-
             const auto sourceText = bytesToString(sourceBytes);
-            const bool isVultraMeshMaterialShader =
-                sourceText.find("vultra/mesh_material.glsl") != std::string::npos;
-            const bool hasVshaderProperties = sourceText.find("[properties]") != std::string::npos;
 
-            vshadersystem::BuildRequest request;
-            request.source.virtualPath = source.virtualPath;
-            request.source.sourceText = sourceText;
-            request.options.language = vshadersystem::ShaderLanguage::eGLSL;
-            request.options.webgpuProfile = webgpu;
-            request.options.materialAccessMode = vshadersystem::MaterialAccessMode::eSSBO;
-            if (isVultraMeshMaterialShader && hasVshaderProperties)
-            {
-                request.options.materialInjection = vshadersystem::CompileOptions::MaterialAccessInjection {
-                    .postMaterialDecl =
-                        "layout(set = 1, binding = 1, std430) readonly buffer VultraMaterialBlock\n"
-                        "{\n"
-                        "    Material vshader_Material;\n"
-                        "};\n"
-                        "Material vshader_LoadMaterial() { return vshader_Material; }\n",
-                    .bindlessTextureArrayName = "u_BindlessTextures",
-                    .macroPrefix              = "VULTRA_",
-                };
-            }
+            // Material parameters / bindless are now declared via Slang attributes ([VshMaterial] etc.)
+            // in the .slang source and recovered by reflection inside build_shader -- no compile-time
+            // GLSL injection. build_shader also expands keyword permutations into per-variant binaries.
+            vshaderc::ShaderBuildOptions options;
+            options.shaderId         = source.virtualPath; // stable id hashed into the variant key
+            options.compile.emitWgsl = webgpu;
+            options.compile.searchDirs.push_back(shaderPath.parent_path().generic_string());
             for (const auto& root : sourceRoots)
-                request.options.includeDirs.push_back(root.root.generic_string());
-            request.options.vfsMounts.push_back(builtinMount);
-            request.enableCache = false;
+                options.compile.searchDirs.push_back(root.root.generic_string());
+            options.compile.vfsFiles = builtinVfs;
             if (engineKeywords)
-            {
-                request.hasEngineKeywords = true;
-                request.engineKeywords = *engineKeywords;
-            }
+                options.engineKeywords = &(*engineKeywords);
 
-            auto built = vshadersystem::build_multiple_shaders(request);
+            auto built = vshaderc::build_shader(compiler,
+                                                shaderPath.stem().generic_string(),
+                                                shaderPath.filename().generic_string(),
+                                                sourceText,
+                                                options);
             if (!built.isOk())
             {
                 const auto message = built.error().message;
@@ -2401,9 +2399,11 @@ namespace
                 return false;
             }
 
-            for (auto& [stage, result] : built.value())
+            const auto& result = built.value();
+            for (const auto& variant : result.variants)
             {
-                auto blob = vshadersystem::write_vshbin(result.binary);
+                auto blob = vshadersystem::v1::write_binary(
+                    vshaderc::to_shader_binary(variant, result.shaderIdHash, result.keywords));
                 if (!blob.isOk())
                 {
                     std::cerr << "[vasset] failed to serialize shader binary: " << source.virtualPath << " ("
@@ -2412,28 +2412,41 @@ namespace
                     return false;
                 }
 
-                entries.push_back(vshadersystem::ShaderLibraryEntry {
-                    .keyHash = result.binary.variantHash,
-                    .stage   = stage,
-                    .blob    = std::move(blob.value()),
+                entries.push_back(vshadersystem::v1::LibraryEntry {
+                    .variantHash = variant.variantHash,
+                    .stage       = variant.stage,
+                    .blob        = std::move(blob.value()),
                 });
             }
         }
 
         if (entries.empty())
             return false;
-        std::filesystem::create_directories(output.parent_path());
-        auto result = vshadersystem::write_vslib(output.generic_string(),
-                                                 entries,
-                                                 engineKeywordsBytes.empty() ? nullptr : &engineKeywordsBytes);
-        if (!result.isOk())
+
+        auto library =
+            vshadersystem::v1::write_library(entries, engineKeywordsBytes.empty() ? nullptr : &engineKeywordsBytes);
+        if (!library.isOk())
         {
-            const auto message = result.error().message;
+            const auto message = library.error().message;
             std::cerr << "[vasset] failed to write shader library: " << output.generic_string() << " (" << message
                       << ")" << std::endl;
             emitShaderDiagnostic(diagnostics, manifest.name, message);
+            return false;
         }
-        return result.isOk();
+
+        // write_library returns bytes (the old write_vslib wrote the file itself).
+        std::filesystem::create_directories(output.parent_path());
+        std::ofstream out(output, std::ios::binary);
+        const auto&   bytes = library.value();
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!out)
+        {
+            const std::string message = "failed to write shader library file: " + output.generic_string();
+            std::cerr << "[vasset] " << message << std::endl;
+            emitShaderDiagnostic(diagnostics, manifest.name, message);
+            return false;
+        }
+        return true;
     }
 
     bool shaderLibraryOutputsAreCurrent(const std::filesystem::path& assetRoot,
