@@ -17,14 +17,18 @@
 
 // v1.0.0: shader compilation is Slang-based and lives in vshaderc-lib (the offline compile core the
 // vshaderc CLI uses); the runtime serialization is vshadersystem::v1 in vsh_format.hpp. The old GLSL
-// build API (binary/library/system.hpp, build_multiple_shaders/write_vslib) is gone.
-#include <vshaderc/slang_build.hpp>
-#include <vshaderc/slang_compiler.hpp>
+// build API (binary/library/system.hpp, build_multiple_shaders/write_vslib) is gone. The Slang
+// compiler is desktop-only (links the prebuilt Slang), so shader-library import is gated to desktop
+// via VASSET_HAS_SLANG_COMPILER (set by the build when linking vshaderc-lib).
+#if defined(VASSET_HAS_SLANG_COMPILER)
+    #include <vshaderc/slang_build.hpp>
+    #include <vshaderc/slang_compiler.hpp>
 
-#include <vshadersystem/engine_keywords.hpp>
-#include <vshadersystem/result.hpp>
-#include <vshadersystem/types.hpp>
-#include <vshadersystem/vsh_format.hpp>
+    #include <vshadersystem/engine_keywords.hpp>
+    #include <vshadersystem/result.hpp>
+    #include <vshadersystem/types.hpp>
+    #include <vshadersystem/vsh_format.hpp>
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -2307,6 +2311,7 @@ namespace
         });
     }
 
+#if defined(VASSET_HAS_SLANG_COMPILER)
     bool runShaderCompiler(
         const std::filesystem::path& assetRoot,
         const ShaderLibraryManifest&  manifest,
@@ -2448,6 +2453,22 @@ namespace
         }
         return true;
     }
+#else
+    // Slang shader compilation is desktop-only (vshaderc-lib + prebuilt Slang). On platforms without
+    // it (wasm/android), shader-library import is unavailable; model/texture/animation import is not.
+    bool runShaderCompiler(
+        const std::filesystem::path&,
+        const ShaderLibraryManifest&,
+        const std::filesystem::path&,
+        const bool,
+        const std::vector<vasset::VAssetImporter::ImportOptions::ShaderVirtualIncludeFile>&,
+        const std::function<void(const vasset::VAssetImporter::ImportOptions::Diagnostic&)>&)
+    {
+        std::cerr << "[vasset] shader-library import requires the desktop Slang compiler (vshaderc-lib)"
+                  << std::endl;
+        return false;
+    }
+#endif
 
     bool shaderLibraryOutputsAreCurrent(const std::filesystem::path& assetRoot,
                                         const std::filesystem::path& manifestPath,

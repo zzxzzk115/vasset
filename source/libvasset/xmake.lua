@@ -2,6 +2,10 @@ add_requires("glm", "stb", "xxhash", "meshoptimizer", "tinyexr", "zstd")
 add_requires("vfilesystem") -- consumed from xmake-repo (was an external/ submodule)
 add_requires("miniaudio 0.11.25")
 local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or has_config("vasset_enable_wasm_import"))
+-- Shader-library import compiles Slang in-process via vshaderc-lib, which links the prebuilt Slang
+-- compiler -- desktop-only. On wasm/android the importer drops shader-library cooking (model/texture/
+-- animation import is unaffected).
+local enable_slang_compiler = enable_import_targets and (is_plat("windows") or is_plat("linux") or is_plat("macosx"))
 local enable_ktx_opencl = not is_plat("android", "wasm", "iphoneos")
 -- vshaderc_lib: link the offline Slang compile library (vshaderc-lib) so the importer compiles
 -- shaders in-process via vshaderc::build_shader (v1.0.0 has no in-lib GLSL build API).
@@ -17,6 +21,8 @@ if enable_import_targets then
     local assimp_draco = is_plat("windows")
     add_requires("assimp", {configs = {shared = false, debug = is_mode("debug"), draco = assimp_draco}})
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
+end
+if enable_slang_compiler then
     add_requires("vshadersystem v1.0.0", {configs = vshadersystem_configs})
 end
 add_requires("ktx", {configs = {
@@ -101,7 +107,13 @@ if enable_import_targets then
         add_headerfiles(table.unpack(import_headers))
         add_files("src/editor_filesystem.cpp", "src/tool_cli.cpp", "src/texture_import_params.cpp", "src/mesh_import_params.cpp", "src/audio_import_params.cpp", "src/stb_vorbis_impl.cpp", "src/vasset_import_database.cpp", "src/vasset_importers.cpp", "src/vasset_pack.cpp", "src/vimport.cpp", "src/vasset_c_api_import.cpp")
         add_deps("vasset", "GaussForge", {public = true})
-        add_packages("assimp", "ozz-animation", "vshadersystem", { public = true })
+        add_packages("assimp", "ozz-animation", { public = true })
+        -- Slang shader-library cooking (vshaderc-lib) is desktop-only; gate the package + the define
+        -- that switches on runShaderCompiler. Other platforms get a stub (model/texture import stays).
+        if enable_slang_compiler then
+            add_packages("vshadersystem", { public = true })
+            add_defines("VASSET_HAS_SLANG_COMPILER", { public = true })
+        end
         if is_mode("debug") then
             add_defines("_DEBUG", { public = true })
         else
