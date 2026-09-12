@@ -23,7 +23,7 @@ local shader_configs = {debug = is_mode("debug"), vshaderc_lib = true}
 if is_plat("windows") then
     shader_configs.runtimes = is_mode("debug") and "MTd" or "MT"
 end
-add_requires("vshadersystem v1.0.0", {configs = shader_configs})
+add_requires("vshadersystem v1.2.1", {configs = shader_configs})
 
 target("installed-consumer")
     set_kind("binary")

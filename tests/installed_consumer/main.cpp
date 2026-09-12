@@ -1,8 +1,56 @@
 #include <vasset/vasset_importers.hpp>
 #include <vasset/vasset_registry.hpp>
+#include <vshadersystem/vsh_format.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+
+bool checkShaderCook()
+{
+    std::filesystem::create_directories("consumer-shaders/imported");
+    std::filesystem::create_directories("consumer-shaders/source");
+    {
+        std::ofstream manifest("consumer-shaders/smoke.vshaderlib.lua");
+        manifest << "return { name = \"smoke\", root = \"source\", shaders = {\"*.vshader\"} }\n";
+        std::ofstream shader("consumer-shaders/source/smoke.vshader");
+        shader << "[shader(\"fragment\")]\n"
+                  "float4 fragmentMain() : SV_Target0 { return float4(1, 0, 0, 1); }\n";
+    }
+    vasset::VAssetRegistry registry {};
+    registry.setAssetRootPath("consumer-shaders");
+    registry.setImportedFolderName("imported");
+    vasset::VAssetImporter importer {registry};
+    if (!importer.importOrReimportAsset("consumer-shaders/smoke.vshaderlib.lua", true)
+        || registry.getRegistry().size() != 1)
+        return false;
+    auto output = std::filesystem::path("consumer-shaders") / registry.getRegistry().begin()->second.importedPath;
+    for (bool web : {false, true})
+    {
+        output.replace_extension(web ? ".vshweblib" : ".vshlib");
+        std::ifstream stream(output, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stream)), {});
+        auto library = vshadersystem::v1::read_library(bytes);
+        if (!library.isOk() || library.value().entries.size() != 1)
+            return false;
+        const auto& entry = library.value().entries.front();
+        auto binary = vshadersystem::v1::read_binary(entry.blob);
+        if (!binary.isOk() || entry.stage != vshadersystem::ShaderStage::eFrag
+            || binary.value().stage != entry.stage || binary.value().spirv.empty()
+            || (web && binary.value().wgsl.empty()))
+            return false;
+    }
+    // Force recompilation so an old cooked file cannot hide a compiler failure.
+    {
+        std::ofstream shader("consumer-shaders/source/smoke.vshader");
+        shader << "this is not valid Slang;\n";
+    }
+    if (importer.importOrReimportAsset("consumer-shaders/smoke.vshaderlib.lua", true))
+        return false;
+    std::cout << "Installed shader consumer: SPIR-V/WGSL readback and invalid-source rejection PASS\n";
+    return true;
+}
 
 int main(int argc, char** argv)
 {
@@ -31,5 +79,5 @@ int main(int argc, char** argv)
     if (importer.importGaussianSplat("consumer-assets/missing.spz", missing, true))
         return 1;
     std::cout << "Installed Gaussian consumer: " << loaded.numPoints << " points, readback and missing-file rejection PASS\n";
-    return 0;
+    return checkShaderCook() ? 0 : 1;
 }
