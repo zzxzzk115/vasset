@@ -43,6 +43,12 @@ jobs:
       - name: Build
         run: xmake repo -u && xmake -vD -y
 
+      - name: Install package
+        run: xmake install -y -o install-check
+
+      - name: Verify installed archives and headers
+        run: xmake lua tests/check_install.lua install-check runtime
+
       - name: Show install error log
         if: failure()
         run: |
