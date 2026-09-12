@@ -9,6 +9,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - importers: "y"
+            install_mode: importers
+          - importers: "n"
+            install_mode: runtime
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,13 +37,19 @@ jobs:
         run: sudo apt-get update && sudo apt-get install build-essential cmake git clang ninja-build python3 -y
 
       - name: Configure WASM Build
-        run: xmake f -m release -p wasm -a wasm32 --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
+        run: xmake f -m release -p wasm -a wasm32 --vasset_enable_wasm_import=${{ matrix.importers }} --vasset_build_examples=n --vasset_build_tests=n --policies=build.ccache:y -y
 
       - name: Show Targets
         run: xmake show -l targets
 
       - name: Build
         run: xmake repo -u && xmake -vD -y
+
+      - name: Install package
+        run: xmake install -y -o install-check
+
+      - name: Verify installed archives and headers
+        run: xmake lua tests/check_install.lua install-check ${{ matrix.install_mode }}
 
       - name: Show install error log
         if: failure()

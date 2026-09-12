@@ -17,13 +17,18 @@ int main()
 
     if (std::filesystem::exists("resources/imported/asset_registry.vreg"))
     {
-        registry.load("resources/imported/asset_registry.vreg");
+        if (!registry.load("resources/imported/asset_registry.vreg"))
+            return 1;
         std::cout << "Loaded existing asset registry with " << registry.getRegistry().size() << " entries."
                   << std::endl;
     }
 
     VAssetImporter assetImporter {registry};
-    assetImporter.importOrReimportAssetFolder("resources");
+    if (!assetImporter.importOrReimportAssetFolder("resources"))
+    {
+        std::cerr << "Failed to import resource folder." << std::endl;
+        return 1;
+    }
 
     std::string spzPath = "resources/splats/hornedlizard.spz";
     if (!std::filesystem::exists(spzPath))
@@ -38,10 +43,12 @@ int main()
         return 1;
     }
 
-    registry.save("resources/imported/asset_registry.vreg");
+    if (!registry.save("resources/imported/asset_registry.vreg"))
+        return 1;
 
     VAssetRegistry loadedRegistry {};
-    loadedRegistry.load("resources/imported/asset_registry.vreg");
+    if (!loadedRegistry.load("resources/imported/asset_registry.vreg"))
+        return 1;
 
     std::cout << "Loaded registry:" << std::endl;
     const auto& reg = loadedRegistry.getRegistry();
@@ -51,14 +58,22 @@ int main()
     }
 
     // Try load VMeshes
+    size_t loadedMeshes = 0;
+    size_t loadedSplats = 0;
     for (const auto& [uuid, entry] : reg)
     {
         if (entry.type == VAssetType::eMesh)
         {
             std::string meshPath = loadedRegistry.getAssetRootPath() + "/" + entry.importedPath;
             VMesh       mesh {};
-            if (loadMesh(meshPath, mesh))
+            if (!loadMesh(meshPath, mesh))
             {
+                std::cerr << "Failed to load imported mesh: " << meshPath << std::endl;
+                return 1;
+            }
+            else
+            {
+                ++loadedMeshes;
                 std::cout << "Loaded mesh: " << meshPath << " (" << mesh.name << ") with " << mesh.vertexCount
                           << " vertices." << std::endl;
                 if (!mesh.hasLocalBounds)
@@ -85,7 +100,7 @@ int main()
                     }
 
                     // Material info
-                    if (subMesh.materialIndex >= 0 && subMesh.materialIndex < static_cast<int>(reg.size()))
+                    if (subMesh.materialIndex < mesh.materials.size())
                     {
                         const auto& material = mesh.materials[subMesh.materialIndex];
                         std::cout << "  Material: " << material.name << std::endl;
@@ -97,8 +112,14 @@ int main()
         {
             std::string    splatPath = loadedRegistry.getAssetRootPath() + "/" + entry.importedPath;
             VGaussianSplat splat {};
-            if (loadGaussianSplat(splatPath, splat))
+            if (!loadGaussianSplat(splatPath, splat))
             {
+                std::cerr << "Failed to load imported gaussian splat: " << splatPath << std::endl;
+                return 1;
+            }
+            else
+            {
+                ++loadedSplats;
                 std::cout << "Loaded gaussian splat: " << splatPath << " (" << splat.name << ") with "
                           << splat.numPoints << " points, shDegree=" << splat.shDegree
                           << ", antialiased=" << (splat.antialiased ? "true" : "false") << std::endl;
@@ -106,5 +127,10 @@ int main()
         }
     }
 
+    if (loadedMeshes == 0 || loadedSplats == 0)
+    {
+        std::cerr << "Expected both mesh and gaussian splat readback." << std::endl;
+        return 1;
+    }
     return 0;
 }

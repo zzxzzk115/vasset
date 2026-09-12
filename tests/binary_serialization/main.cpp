@@ -72,6 +72,78 @@ namespace
     }
 } // namespace
 
+TEST(MeshSerialization, LongPathRoundTrip)
+{
+    const auto root = std::filesystem::current_path() / ("mesh-path-" + vbase::to_string(vbase::uuid_random()));
+    auto cleanupRoot = root;
+#ifdef _WIN32
+    const auto native = root.native();
+    cleanupRoot = native.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + native.substr(2) : L"\\\\?\\" + native;
+#endif
+    struct Cleanup
+    {
+        std::filesystem::path path;
+        ~Cleanup()
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup {cleanupRoot};
+    auto directory = root / "imported";
+    while (directory.string().size() < 300)
+        directory /= "nested-mesh-output";
+
+    VMesh mesh {};
+    mesh.name        = "Long path mesh";
+    mesh.uuid        = vbase::uuid_random();
+    mesh.vertexCount = 3;
+    mesh.vertexFlags = VVertexFlags::ePosition;
+    mesh.positions  = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+    mesh.indices    = {0, 1, 2};
+
+    for (const int compression : {0, 3})
+    {
+        const auto path = directory / ("mesh-" + std::to_string(compression) + ".vmesh");
+        const auto relative = std::filesystem::relative(path, std::filesystem::current_path());
+        ASSERT_TRUE(saveMesh(mesh, relative.string(), compression));
+        for (const auto& input : {path, relative})
+        {
+            VMesh loaded {};
+            ASSERT_TRUE(loadMesh(input.string(), loaded));
+            EXPECT_EQ(loaded.name, mesh.name);
+            EXPECT_EQ(loaded.uuid, mesh.uuid);
+            EXPECT_EQ(loaded.positions, mesh.positions);
+            EXPECT_EQ(loaded.indices, mesh.indices);
+        }
+
+        VAssetRegistry registry;
+        registry.setAssetRootPath(root.generic_string());
+        const auto imported = path.lexically_relative(root).generic_string();
+        ASSERT_TRUE(registry.registerAsset(mesh.uuid, "", imported, VAssetType::eMesh));
+        registry.cleanup();
+        ASSERT_EQ(registry.getRegistry().size(), 1u);
+        ASSERT_TRUE(registry.save((root / "imported" / "asset_registry.tsv").generic_string()));
+        VAssetRegistry loadedRegistry;
+        ASSERT_TRUE(loadedRegistry.load((root / "imported" / "asset_registry.tsv").generic_string()));
+        EXPECT_EQ(loadedRegistry.lookup(mesh.uuid).importedPath, imported);
+
+        const auto outVpk = root / "mesh.vpk";
+        const auto packed = packAssetFolderToVpk(root.generic_string(), outVpk.generic_string(), {});
+        ASSERT_TRUE(packed);
+        ASSERT_EQ(packed.value(), 1u);
+        const auto opened = openVpk(outVpk.generic_string());
+        ASSERT_TRUE(opened);
+        const auto payload = readVpkFile(opened.value(), outVpk.generic_string(), imported);
+        ASSERT_TRUE(payload);
+        VMesh packedMesh;
+        ASSERT_TRUE(loadMeshFromMemory(payload.value(), packedMesh));
+        EXPECT_EQ(packedMesh.uuid, mesh.uuid);
+        EXPECT_EQ(packedMesh.positions, mesh.positions);
+        EXPECT_EQ(packedMesh.indices, mesh.indices);
+    }
+    std::filesystem::remove_all(cleanupRoot);
+}
+
 TEST(MeshSerialization, BasicSerialization)
 {
     VMesh mesh {};

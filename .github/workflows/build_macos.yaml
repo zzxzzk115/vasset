@@ -26,6 +26,24 @@ jobs:
       - name: Build
         run: xmake repo -u && xmake -vD -y
 
+      - name: Run unit tests
+        run: xmake run test-c-api
+
+      - name: Run serialization tests
+        run: xmake run test-binary-serialization
+
+      - name: Run importer readback tests
+        run: xmake run test-importers
+
+      - name: Install package
+        run: xmake install -y -o install-check
+
+      - name: Verify installed archives and headers
+        run: xmake lua tests/check_install.lua install-check importers
+
+      - name: Link and run installed Gaussian consumer
+        run: xmake lua tests/check_installed_consumer.lua install-check
+
       - name: Show install error log
         if: failure()
         run: |

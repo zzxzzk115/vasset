@@ -1,3 +1,5 @@
+#include "file_path.hpp"
+
 #include "vasset/vasset_registry.hpp"
 
 #include <algorithm>
@@ -343,7 +345,7 @@ namespace vasset
 
     vbase::Result<void, AssetError> VAssetRegistry::save(vbase::StringView filename) const
     {
-        std::filesystem::path p(filename);
+        const auto p = detail::filePath(std::filesystem::path(filename));
         if (p.has_parent_path())
             std::filesystem::create_directories(p.parent_path());
 
@@ -379,7 +381,7 @@ namespace vasset
 
     vbase::Result<void, AssetError> VAssetRegistry::load(vbase::StringView filename)
     {
-        std::ifstream f(std::string(filename), std::ios::binary);
+        std::ifstream f(detail::filePath(std::filesystem::path(filename)), std::ios::binary);
         if (!f)
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
@@ -466,8 +468,8 @@ namespace vasset
             const auto sourcePath = std::filesystem::path(m_AssetRootPath) / physicalSourcePath;
             const auto importPath = std::filesystem::path(m_AssetRootPath) / it->second.importedPath;
 
-            const bool missingSource = !physicalSourcePath.empty() && !std::filesystem::exists(sourcePath);
-            const bool missingImport = !it->second.importedPath.empty() && !std::filesystem::exists(importPath);
+            const bool missingSource = !physicalSourcePath.empty() && !std::filesystem::exists(detail::filePath(sourcePath));
+            const bool missingImport = !it->second.importedPath.empty() && !std::filesystem::exists(detail::filePath(importPath));
             if (missingSource || missingImport)
                 it = m_Registry.erase(it);
             else

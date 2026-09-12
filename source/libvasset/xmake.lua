@@ -47,6 +47,7 @@ local runtime_headers = {
     "include/(vasset/vasset_type.hpp)",
     "include/(vasset/vanimation.hpp)",
     "include/(vasset/vaudio.hpp)",
+    "include/(vasset/vfont.hpp)",
     "include/(vasset/vgaussiansplat.hpp)",
     "include/(vasset/vmaterial.hpp)",
     "include/(vasset/vmesh.hpp)",
