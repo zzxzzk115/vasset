@@ -5,6 +5,7 @@ function main(prefix)
     local fixture = path.join(projectdir, "resources/splats/hornedlizard.spz")
     assert(os.isfile(fixture), "missing Gaussian fixture")
     os.execv(os.programfile(), {"f", "-y", "-P", consumer, "-m", "release", "--prefix=" .. path.absolute(prefix)})
-    os.execv(os.programfile(), {"build", "-y", "-P", consumer})
+    -- Installed archives are external link inputs; force relinking after a new installation.
+    os.execv(os.programfile(), {"build", "-r", "-y", "-P", consumer})
     os.execv(os.programfile(), {"run", "-P", consumer, "installed-consumer", fixture})
 end

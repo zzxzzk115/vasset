@@ -1,5 +1,6 @@
 #include <vasset/vasset_importers.hpp>
 #include <vasset/vasset_registry.hpp>
+#include <vasset/vasset_import_database.hpp>
 #include <vshadersystem/vsh_format.hpp>
 
 #include <filesystem>
@@ -26,6 +27,22 @@ bool checkShaderCook()
         || registry.getRegistry().size() != 1)
         return false;
     auto output = std::filesystem::path("consumer-shaders") / registry.getRegistry().begin()->second.importedPath;
+    // Reproduce a matching legacy cache record with newer outputs and unchanged source hashes.
+    const std::string databasePath = "consumer-shaders/imported/asset_database.tsv";
+    vasset::VAssetImportDatabase database;
+    if (!database.load(databasePath) || database.records().size() != 1)
+        return false;
+    auto legacy = database.records().begin()->second;
+    legacy.importerVersion = "shader_library:2";
+    database.upsert(legacy);
+    if (!database.save(databasePath))
+        return false;
+    {
+        std::ofstream stale(output, std::ios::binary);
+        stale << "legacy compiler output sentinel";
+    }
+    if (!importer.importOrReimportAsset("consumer-shaders/smoke.vshaderlib.lua"))
+        return false;
     for (bool web : {false, true})
     {
         output.replace_extension(web ? ".vshweblib" : ".vshlib");
@@ -48,7 +65,7 @@ bool checkShaderCook()
     }
     if (importer.importOrReimportAsset("consumer-shaders/smoke.vshaderlib.lua", true))
         return false;
-    std::cout << "Installed shader consumer: SPIR-V/WGSL readback and invalid-source rejection PASS\n";
+    std::cout << "Installed shader consumer: legacy-cache recook, SPIR-V/WGSL readback and invalid-source rejection PASS\n";
     return true;
 }
 
