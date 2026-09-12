@@ -57,6 +57,9 @@ jobs:
       - name: Run serialization tests
         run: xmake run test-binary-serialization
 
+      - name: Run importer readback tests
+        run: xmake run test-importers
+
       - name: Install package
         run: xmake install -y -o install-check
 

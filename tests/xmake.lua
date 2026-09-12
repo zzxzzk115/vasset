@@ -1,6 +1,9 @@
 -- Importer tests need the same Slang runtime deployment as the VPK example.
 rule("vasset.test_slang_runtime")
     on_load(function (target)
+        if not target:is_plat("windows", "linux", "macosx") then
+            return
+        end
         target:add("packages", "vshadersystem")
         if target:is_plat("macosx") then
             target:add("rpathdirs", "@executable_path")
@@ -9,6 +12,9 @@ rule("vasset.test_slang_runtime")
         end
     end)
     after_build(function (target)
+        if not target:is_plat("windows", "linux", "macosx") then
+            return
+        end
         local vsh = assert(target:pkg("vshadersystem"), "missing test Slang package")
         local bindir = path.join(vsh:installdir(), "bin")
         assert(os.isdir(bindir), "missing test Slang runtime: " .. bindir)

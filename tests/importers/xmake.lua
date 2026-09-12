@@ -25,3 +25,4 @@ target("test-importers")
 
     -- set target directory
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/test-importers")
+    set_rundir("$(builddir)/$(plat)/$(arch)/$(mode)/test-importers")
