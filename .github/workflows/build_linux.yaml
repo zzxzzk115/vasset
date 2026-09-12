@@ -44,6 +44,9 @@ jobs:
       - name: Verify installed archives and headers
         run: xmake lua tests/check_install.lua install-check importers
 
+      - name: Link and run installed Gaussian consumer
+        run: xmake lua tests/check_installed_consumer.lua install-check
+
       - name: Show install error log
         if: failure()
         run: |
