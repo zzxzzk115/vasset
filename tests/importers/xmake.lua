@@ -2,6 +2,7 @@
 target("test-importers")
     -- set target kind: binary
     set_kind("binary")
+    add_rules("vasset.test_slang_runtime")
 
     -- add source files
     add_files("**.cpp")
