@@ -8,7 +8,10 @@ local enable_import_targets = not is_plat("android") and (not is_plat("wasm") or
 local enable_slang_compiler = enable_import_targets and (is_plat("windows") or is_plat("linux") or is_plat("macosx"))
 local enable_ktx_opencl = not is_plat("android", "wasm", "iphoneos")
 -- vshaderc_lib: link the offline Slang compile library (vshaderc-lib) so the importer compiles
--- shaders in-process via vshaderc::build_shader (v1.0.0 has no in-lib GLSL build API).
+-- shaders in-process via vshaderc::build_shader (the 1.x line has no in-lib GLSL build API).
+-- Keep this pinned to the version the rest of the ecosystem resolves to: a consumer that links both
+-- vasset and vshadersystem otherwise gets two copies -- two sets of symbols, and a cook whose
+-- `.vshlib` need not match what the loader in the other copy reads.
 local vshadersystem_configs = {debug = is_mode("debug"), vshaderc_lib = true}
 if is_host("windows") then
     vshadersystem_configs.runtimes = is_mode("debug") and "MTd" or "MT"
@@ -23,7 +26,7 @@ if enable_import_targets then
     add_requires("ozz-animation", {configs = {tools = false, fbx = false, gltf = false, data = false, debug = is_mode("debug")}})
 end
 if enable_slang_compiler then
-    add_requires("vshadersystem v1.0.0", {configs = vshadersystem_configs})
+    add_requires("vshadersystem v1.2.1", {configs = vshadersystem_configs})
 end
 add_requires("ktx", {configs = {
     decoder = true,
@@ -44,6 +47,7 @@ local runtime_headers = {
     "include/(vasset/vasset_type.hpp)",
     "include/(vasset/vanimation.hpp)",
     "include/(vasset/vaudio.hpp)",
+    "include/(vasset/vfont.hpp)",
     "include/(vasset/vgaussiansplat.hpp)",
     "include/(vasset/vmaterial.hpp)",
     "include/(vasset/vmesh.hpp)",

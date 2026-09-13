@@ -1,3 +1,5 @@
+#include "file_path.hpp"
+
 #include "vasset/vmesh.hpp"
 #include "vasset/asset_error.hpp"
 
@@ -57,7 +59,7 @@ namespace vasset
         // ------------------------------------------------------------
         // Prepare output directory
         // ------------------------------------------------------------
-        std::filesystem::path path(filePath);
+        const auto path = detail::filePath(std::filesystem::path(filePath));
         if (path.has_parent_path() && !std::filesystem::exists(path.parent_path()))
         {
             std::filesystem::create_directories(path.parent_path());
@@ -361,7 +363,7 @@ namespace vasset
         // ------------------------------------------------------------
         // Write file
         // ------------------------------------------------------------
-        std::ofstream file(std::string(filePath), std::ios::binary);
+        std::ofstream file(path, std::ios::binary);
         if (!file)
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);
 
@@ -404,7 +406,7 @@ namespace vasset
 
     vbase::Result<void, AssetError> loadMesh(vbase::StringView filePath, VMesh& outMesh)
     {
-        std::filesystem::path path(filePath);
+        const auto path = detail::filePath(std::filesystem::path(filePath));
 
         if (!std::filesystem::exists(path))
             return vbase::Result<void, AssetError>::err(AssetError::eNotFound);

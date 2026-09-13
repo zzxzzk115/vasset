@@ -2555,7 +2555,8 @@ namespace
         const uint64_t sourceHash     = hashFile(osPath);
         const uint64_t dependencyHash = shaderLibraryDependencyHash(assetRoot, *manifest, virtualIncludes);
         constexpr uint64_t paramsHash = 0;
-        constexpr auto importerVersion = "shader_library:2";
+        // The compiler upgrade changes matrix layout and variant reflection even for unchanged sources.
+        constexpr auto importerVersion = "shader_library:3:vshadersystem:1.2.1";
         constexpr auto outputSchema = "vshlib:v4+vshweblib:1";
 
         auto       entry      = registry.lookup(lookupUUID);
