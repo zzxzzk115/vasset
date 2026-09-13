@@ -4,6 +4,7 @@ add_requires("gtest")
 target("test-binary-serialization")
     -- set target kind: binary
     set_kind("binary")
+    add_rules("vasset.test_slang_runtime")
 
     -- add source files
     add_files("**.cpp")

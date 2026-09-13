@@ -1,3 +1,5 @@
+#include "file_path.hpp"
+
 #include <vasset/vasset_pack.hpp>
 
 #include <vasset/vasset_registry.hpp>
@@ -22,7 +24,7 @@ namespace vasset
     {
         std::vector<std::byte> readBinaryFile(const std::filesystem::path& filePath)
         {
-            std::ifstream f(filePath, std::ios::binary);
+            std::ifstream f(detail::filePath(filePath), std::ios::binary);
             if (!f)
                 return {};
 
@@ -415,8 +417,16 @@ namespace vasset
             items.push_back(std::move(item));
         }
 
-        for (const auto& entry : fs::recursive_directory_iterator(assetRootPath))
+        for (auto it = fs::recursive_directory_iterator(assetRootPath); it != fs::recursive_directory_iterator(); ++it)
         {
+            const auto& entry = *it;
+            // Imported payloads were already read through the registry. Avoid descending
+            // into them during the raw-source scan, including long cooked directory trees.
+            if (entry.path() == assetRootPath / "imported" && entry.is_directory())
+            {
+                it.disable_recursion_pending();
+                continue;
+            }
             if (!entry.is_regular_file())
                 continue;
 

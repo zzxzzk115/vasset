@@ -3,6 +3,7 @@ add_requires("gtest")
 -- target definition, name: test-c-api
 target("test-c-api")
     set_kind("binary")
+    add_rules("vasset.test_slang_runtime")
     add_files("**.cpp")
     add_packages("gtest")
     add_deps("vasset", "vasset-import")
