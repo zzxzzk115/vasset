@@ -24,6 +24,18 @@
         <img src="https://img.shields.io/github/license/zzxzzk115/vasset"></a>
 </p>
 
+## Pipeline
+
+```mermaid
+flowchart LR
+    A["Source assets<br/>Models · textures · splats"] --> B["Import<br/>Assimp + asset loaders"]
+    B --> C["Cooked assets<br/>Asset registry"]
+    C --> D["Pack<br/>Optional zstd compression"]
+    D --> E["VPK package<br/>Runtime asset loading"]
+```
+
+Import source assets, cook registry entries, and package them for runtime loading.
+
 ## Features
 
 - Custom asset file formats: VMesh, VTexture, VMaterial
