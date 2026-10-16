@@ -1,0 +1,5 @@
+flowchart LR
+    A["Source assets<br/>Models · textures · splats"] --> B["Import<br/>Assimp + asset loaders"]
+    B --> C["Cooked assets<br/>Asset registry"]
+    C --> D["Pack<br/>Optional zstd compression"]
+    D --> E["VPK package<br/>Runtime asset loading"]
