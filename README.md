@@ -34,7 +34,7 @@ flowchart LR
     D --> E["VPK package<br/>Runtime asset loading"]
 ```
 
-Import source assets, cook registry entries, and package them for runtime loading. [Diagram source and validation notes](docs/showcase.md).
+Import source assets, cook registry entries, and package them for runtime loading.
 
 ## Features
 
